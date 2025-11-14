@@ -29,7 +29,7 @@ SEMproxy::SEMproxy(const SemProxyOptions& opt)
   nb_nodes_[0] = opt.ex * order + 1;
   nb_nodes_[1] = opt.ey * order + 1;
   nb_nodes_[2] = opt.ez * order + 1;
-
+  snapshot = opt.snapshot; // ADDED the SNAPSHOT HERE 
   const float spongex = opt.boundaries_size;
   const float spongey = opt.boundaries_size;
   const float spongez = opt.boundaries_size;
@@ -162,7 +162,26 @@ void SEMproxy::run()
       m_solver->outputSolutionValues(indexTimeSample, i1, rhsElement[0],
                                      pnGlobal, "pnGlobal");
     }
+    if(snapshot !=0 && indexTimeSample !=0 && snapshot % indexTimeSample == 0 ){
+        std::ofstream out("results.txt", std::ios::app);
 
+    if (!out)
+    {
+        std::cerr << "Error: cannot open results.txt\n";
+    }
+    else
+    {
+        float value = pnGlobal(
+            m_mesh->globalNodeIndex(rhsElement[0], 0, 0, 0),
+            i1
+        );
+
+        out << "TimeStep=" << indexTimeSample
+            << "; pnGlobal @ elementSource location " << rhsElement[0]
+            << " = " << value << "\n";
+    }
+}
+    
     // Save pressure at receiver
     const int order = m_mesh->getOrder();
 
