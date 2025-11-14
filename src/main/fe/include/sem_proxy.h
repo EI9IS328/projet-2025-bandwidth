@@ -95,7 +95,7 @@ class SEMproxy
   int snapshot;
   // physics
   bool isElastic_;
-
+  std::string file;
   // time parameters
   float dt_;
   float timemax_;

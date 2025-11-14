@@ -20,6 +20,7 @@ class SemProxyOptions
   float timemax = 1.5;
   bool autodt = false;
   int snapshot = 0;
+  std::string file;
   // sponge boundaries parameters
   float boundaries_size = 0;
   bool surface_sponge = false;
@@ -66,6 +67,8 @@ static void bind_cli(cxxopts::Options& opts, SemProxyOptions& o)
     // 🔹 New option here:
     ("snap", "Size of the step for the snapshot",
      cxxopts::value<int>(o.snapshot))
+	 ("file", "Size of the step for the snapshot",
+     cxxopts::value<std::string>(o.file))
     ("auto-dt", "Select automatique dt via CFL equation.",
      cxxopts::value<bool>(o.autodt))
     ("boundaries-size", "Size of absorbing boundaries (meters)",

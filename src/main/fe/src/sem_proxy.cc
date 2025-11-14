@@ -162,7 +162,7 @@ void SEMproxy::run()
       m_solver->outputSolutionValues(indexTimeSample, i1, rhsElement[0],
                                      pnGlobal, "pnGlobal");
     }
-    if(snapshot !=0 && indexTimeSample !=0 && snapshot % indexTimeSample == 0 ){
+    if(snapshot !=0 && indexTimeSample !=0 &&  indexTimeSample % snapshot == 0 ){
         std::ofstream out("results.txt", std::ios::app);
 
     if (!out)
