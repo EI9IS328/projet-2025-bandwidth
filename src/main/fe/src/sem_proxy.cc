@@ -157,29 +157,34 @@ void SEMproxy::run()
 
     startOutputTime = system_clock::now();
 
-    if (indexTimeSample % 50 == 0)
+    i    if (indexTimeSample % 50 == 0)
     {
       m_solver->outputSolutionValues(indexTimeSample, i1, rhsElement[0],
                                      pnGlobal, "pnGlobal");
     }
-    if(snapshot !=0 && indexTimeSample !=0 &&  indexTimeSample % snapshot == 0 ){
-        std::ofstream out("results.txt", std::ios::app);
 
-    if (!out)
+    // --- SNAPSHOT OUTPUT: Step x y z pnGlobal ---
+    if (snapshot > 0 &&
+        indexTimeSample != 0 &&
+        indexTimeSample % snapshot == 0 &&
+        out)  // check that file is open
     {
-        std::cerr << "Error: cannot open results.txt\n";
-    }
-    else
-    {
-        float value = pnGlobal(
-            m_mesh->globalNodeIndex(rhsElement[0], 0, 0, 0),
-            i1
-        );
+      // Choose the node where you want pnGlobal
+      // Here: source element, node (0,0,0)
+      int nodeIdx = m_mesh->globalNodeIndex(rhsElement[0], 0, 0, 0);
+      float value = pnGlobal(nodeIdx, i1);
 
-        out << "TimeStep=" << indexTimeSample
-            << "; pnGlobal @ elementSource location " << rhsElement[0]
-            << " = " << value << "\n";
+      // Coordinates: source position
+      float x = src_coord_[0];
+      float y = src_coord_[1];
+      float z = src_coord_[2];
+
+      // Print: Step  x  y  z  pnGlobal
+      out << indexTimeSample << " "
+          << x << " " << y << " " << z << " "
+          << value << "\n";
     }
+
 }
     
     // Save pressure at receiver
