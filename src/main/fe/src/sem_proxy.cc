@@ -147,7 +147,26 @@ void SEMproxy::run()
 
   SEMsolverDataAcoustic solverData(i1, i2, myRHSTerm, pnGlobal, rhsElement,
                                    rhsWeights);
+  	std::ofstream out;
+    if (snapshot > 0)
+        out.open("results.txt", std::ios::app);
+    
 
+    if (snapshot > 0 && !out)
+        std::cerr << "Error: cannot open results.txt\n";
+    // --- 🆕 AJOUT : écrire les paramètres au début du fichier ---
+    if (snapshot > 0 && out) {
+        out << "# Simulation parameters\n";
+        out << "# ex=" << nb_elements_[0] << "\n";
+        out << "# ey=" << nb_elements_[1] << "\n";
+        out << "# ez=" << nb_elements_[2] << "\n";
+        out << "# order=" << m_mesh->getOrder() << "\n";
+        out << "# dt=" << dt_ << "\n";
+        out << "# timemax=" << timemax_ << "\n";
+        out << "# src=(" << src_coord_[0] << "," << src_coord_[1] << "," << src_coord_[2] << ")\n";
+        out << "# rcv=(" << rcv_coord_[0] << "," << rcv_coord_[1] << "," << rcv_coord_[2] << ")\n";
+        out << "# Columns: Step, Elem, i, j, k, X, Y, Z, pnGlobal\n\n";
+    }
   for (int indexTimeSample = 0; indexTimeSample < num_sample_;
        indexTimeSample++)
   {
@@ -162,31 +181,40 @@ void SEMproxy::run()
       m_solver->outputSolutionValues(indexTimeSample, i1, rhsElement[0],
                                      pnGlobal, "pnGlobal");
     }
-	 if(snapshot !=0 && indexTimeSample !=0 &&  indexTimeSample % snapshot == 0 ){
-		std::ofstream out("results.txt", std::ios::app);
     // --- SNAPSHOT OUTPUT: Step x y z pnGlobal ---
     if (snapshot > 0 &&
         indexTimeSample != 0 &&
         indexTimeSample % snapshot == 0 &&
-        out)  // check that file is open
+        out)  // fichier bien ouvert
     {
-      // Choose the node where you want pnGlobal
-      // Here: source element, node (0,0,0)
-      int nodeIdx = m_mesh->globalNodeIndex(rhsElement[0], 0, 0, 0);
-      float value = pnGlobal(nodeIdx, i1);
+      int ne    = m_mesh->getNumberOfElements();
+      int order = m_mesh->getOrder();
 
-      // Coordinates: source position
-      float x = src_coord_[0];
-      float y = src_coord_[1];
-      float z = src_coord_[2];
+      for (int e = 0; e < ne; ++e) {
+        for (int k = 0; k <= order; ++k) {
+          for (int j = 0; j <= order; ++j) {
+            for (int i = 0; i <= order; ++i) {
 
-      // Print: Step  x  y  z  pnGlobal
-      out << indexTimeSample << " "
-          << x << " " << y << " " << z << " "
-          << value << "\n";
+              int nodeIdx = m_mesh->globalNodeIndex(e, i, j, k);
+
+              float x = m_mesh->nodeCoord(nodeIdx, 0);
+              float y = m_mesh->nodeCoord(nodeIdx, 1);
+              float z = m_mesh->nodeCoord(nodeIdx, 2);
+
+              float value = pnGlobal(nodeIdx, i1);
+
+              // Step  elem  i  j  k  x  y  z  pnGlobal
+              out << indexTimeSample << " "
+                  << e   << " "
+                  << i   << " " << j << " " << k << " "
+                  << x   << " " << y << " " << z << " "
+                  << value << "\n";
+            }
+          }
+        }
+      }
     }
 
-}
     
     // Save pressure at receiver
     const int order = m_mesh->getOrder();
@@ -203,6 +231,7 @@ void SEMproxy::run()
               i + j * (order + 1) + k * (order + 1) * (order + 1);
           varnp1 +=
               pnGlobal(nodeIdx, i2) * rhsWeightsRcv(0, globalNodeOnElement);
+    
         }
       }
     }
@@ -231,7 +260,6 @@ void SEMproxy::run()
        << endl;
   cout << "------------------------------------------------ " << endl;
 }
-
 // Initialize arrays
 void SEMproxy::init_arrays()
 {
