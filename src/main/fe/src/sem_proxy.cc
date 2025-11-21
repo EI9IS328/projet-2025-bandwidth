@@ -157,12 +157,13 @@ void SEMproxy::run()
 
     startOutputTime = system_clock::now();
 
-    i    if (indexTimeSample % 50 == 0)
+    if (indexTimeSample % 50 == 0)
     {
       m_solver->outputSolutionValues(indexTimeSample, i1, rhsElement[0],
                                      pnGlobal, "pnGlobal");
     }
-
+	 if(snapshot !=0 && indexTimeSample !=0 &&  indexTimeSample % snapshot == 0 ){
+		std::ofstream out("results.txt", std::ios::app);
     // --- SNAPSHOT OUTPUT: Step x y z pnGlobal ---
     if (snapshot > 0 &&
         indexTimeSample != 0 &&
