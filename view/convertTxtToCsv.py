@@ -1,18 +1,13 @@
-import csv
+import pandas as pd
 
-input_file = "data.txt"
-output_file = "data.csv"
+# Input and output file paths
+input_txt = "data.txt"
+output_csv = "data.csv"
 
-with open(input_file, "r") as txt_file, open(output_file, "w", newline="") as csv_file:
-    writer = csv.writer(csv_file)
-    
-    for line in txt_file:
-        # Skip empty lines
-        if not line.strip():
-            continue
-        
-        # Split by whitespace into columns
-        row = line.split()
-        writer.writerow(row)
+# Read the space-separated .txt file into a pandas DataFrame
+df = pd.read_csv(input_txt, delim_whitespace=True)
 
-print("Conversion complete! CSV saved as:", output_file)
+# Save the DataFrame to a .csv file
+df.to_csv(output_csv, index=False)
+
+print(f"CSV file saved to: {output_csv}")

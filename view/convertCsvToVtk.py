@@ -1,34 +1,36 @@
 import pandas as pd
 
-csv_file = "data.csv"
-vtk_file = "data.vtk"
+# Input CSV file and output VTK file paths
+input_csv = "data.csv"
+output_vtk = "data.vtk"
 
-# Load CSV
-df = pd.read_csv(csv_file)
+# Read the CSV into a pandas DataFrame
+df = pd.read_csv(input_csv)
 
-# Expect columns: x, y, z, pnglobal
-x = df["x"]
-y = df["y"]
-z = df["z"]
-p = df["pnglobal"]
+# Extract the columns of interest: Step, X, Y, Z, pnGlobal
+x = df['X']
+y = df['Y']
+z = df['Z']
+pnGlobal = df['pnGlobal']
 
-with open(vtk_file, "w") as f:
+# Write the VTK file in PolyData format
+with open(output_vtk, "w") as f:
     f.write("# vtk DataFile Version 3.0\n")
-    f.write("Point data exported from CSV\n")
+    f.write("Converted CSV to VTK\n")
     f.write("ASCII\n")
     f.write("DATASET POLYDATA\n")
     f.write(f"POINTS {len(df)} float\n")
 
-    # write coordinates
+    # Write the points (X, Y, Z)
     for xi, yi, zi in zip(x, y, z):
         f.write(f"{xi} {yi} {zi}\n")
 
-    # write per-point scalar
+    # Write the point data (pnGlobal) as scalars
     f.write(f"\nPOINT_DATA {len(df)}\n")
-    f.write("SCALARS pnglobal float 1\n")
+    f.write("SCALARS pnGlobal float 1\n")
     f.write("LOOKUP_TABLE default\n")
 
-    for pi in p:
+    for pi in pnGlobal:
         f.write(f"{pi}\n")
 
-print("Saved:", vtk_file)
+print(f"VTK file saved to: {output_vtk}")
