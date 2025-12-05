@@ -150,24 +150,25 @@ void SEMproxy::run()
                                    rhsWeights);
   	std::ofstream out;
     if (snapshot > 0)
-        out.open("results.txt", std::ios::app);
+        out.open("results.csv", std::ios::app);
     
 
     if (snapshot > 0 && !out)
         std::cerr << "Error: cannot open results.txt\n";
     // --- 🆕 AJOUT : écrire les paramètres au début du fichier ---
-    if (snapshot > 0 && out) {
-        out << "# Simulation parameters\n";
-        out << "# ex=" << nb_elements_[0] << "\n";
-        out << "# ey=" << nb_elements_[1] << "\n";
-        out << "# ez=" << nb_elements_[2] << "\n";
-        out << "# order=" << m_mesh->getOrder() << "\n";
-        out << "# dt=" << dt_ << "\n";
-        out << "# timemax=" << timemax_ << "\n";
-        out << "# src=(" << src_coord_[0] << "," << src_coord_[1] << "," << src_coord_[2] << ")\n";
-        out << "# rcv=(" << rcv_coord_[0] << "," << rcv_coord_[1] << "," << rcv_coord_[2] << ")\n";
-        out << "# Columns: Step, Elem, i, j, k, X, Y, Z, pnGlobal\n\n";
-    }
+    // if (snapshot > 0 && out) {
+    //     out << "# Simulation parameters\n";
+    //     out << "# ex=" << nb_elements_[0] << "\n";
+    //     out << "# ey=" << nb_elements_[1] << "\n";
+    //     out << "# ez=" << nb_elements_[2] << "\n";
+    //     out << "# order=" << m_mesh->getOrder() << "\n";
+    //     out << "# dt=" << dt_ << "\n";
+    //     out << "# timemax=" << timemax_ << "\n";
+    //     out << "# src=(" << src_coord_[0] << "," << src_coord_[1] << "," << src_coord_[2] << ")\n";
+    //     out << "# rcv=(" << rcv_coord_[0] << "," << rcv_coord_[1] << "," << rcv_coord_[2] << ")\n";
+    //     out << "# Columns: Step, Elem, i, j, k, X, Y, Z, pnGlobal\n\n";
+    // }
+    out << "Step,X,Y,Z,pnGlobal\n";
   for (int indexTimeSample = 0; indexTimeSample < num_sample_;
        indexTimeSample++)
   {
@@ -205,10 +206,10 @@ void SEMproxy::run()
               float value = pnGlobal(nodeIdx, i1);
 
               // Step  elem  i  j  k  x  y  z  pnGlobal
-              out << indexTimeSample << " "
-                  << e   << " "
-                  << i   << " " << j << " " << k << " "
-                  << x   << " " << y << " " << z << " "
+              out << indexTimeSample << ","
+                  // << e   << ","
+                  // << i   << "," << j << "," << k << ","
+                  << x   << "," << y << "," << z << ","
                   << value << "\n";
             }
           }
