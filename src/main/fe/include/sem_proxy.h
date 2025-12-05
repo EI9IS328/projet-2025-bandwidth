@@ -87,7 +87,7 @@ class SEMproxy
   std::array<float, 3> src_coord_ = {0};
   std::array<float, 3> rcv_coord_ = {0};
   float domain_size_[3] = {0};
-
+  int num_receivers = 1;
   // snapshots
   bool is_snapshots_;
   int snap_time_interval_;
@@ -95,7 +95,7 @@ class SEMproxy
   int snapshot;
   // physics
   bool isElastic_;
-  std::string file;
+  std::string recv_file = "receivers.txt";
   // time parameters
   float dt_;
   float timemax_;
