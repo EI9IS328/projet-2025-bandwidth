@@ -226,7 +226,7 @@ void SEMproxy::run()
       float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
 
       std::ofstream recv("recev_results_" + std::to_string(m) + ".txt", std::ios::app);
-      recv << xn << " " << yn << " " << zn << " " << varnp1 << "\n";
+      recv << indexTimeSample << " " << xn << " " << yn << " " << zn << " " << varnp1 << "\n";
       pnAtReceiver(m, indexTimeSample) = varnp1;
       }
 
