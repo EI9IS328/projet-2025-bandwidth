@@ -29,8 +29,9 @@ SEMproxy::SEMproxy(const SemProxyOptions& opt)
   nb_nodes_[0] = opt.ex * order + 1;
   nb_nodes_[1] = opt.ey * order + 1;
   nb_nodes_[2] = opt.ez * order + 1;
-  snapshot = opt.snapshot; // ADDED the SNAPSHOT HERE 
+  snapshot = opt.snapshot;  // ADDED the SNAPSHOT HERE
   recv_file = opt.recv_file;
+  recv_on = opt.recv_on;
   const float spongex = opt.boundaries_size;
   const float spongey = opt.boundaries_size;
   const float spongez = opt.boundaries_size;
@@ -58,7 +59,8 @@ SEMproxy::SEMproxy(const SemProxyOptions& opt)
   const SolverFactory::modelLocationType modelLocation =
       isModelOnNodes ? SolverFactory::modelLocationType::OnNodes
                      : SolverFactory::modelLocationType::OnElements;
-  const SolverFactory::physicType physicType = SolverFactory::physicType::Acoustic;
+  const SolverFactory::physicType physicType =
+      SolverFactory::physicType::Acoustic;
 
   float lx = domain_size_[0];
   float ly = domain_size_[1];
@@ -138,7 +140,6 @@ SEMproxy::SEMproxy(const SemProxyOptions& opt)
   std::cout << "Order of approximation will be " << order << std::endl;
   std::cout << "Time step is " << dt_ << "s" << std::endl;
   std::cout << "Simulated time is " << timemax_ << "s" << std::endl;
-
 }
 
 void SEMproxy::run()
@@ -148,27 +149,25 @@ void SEMproxy::run()
 
   SEMsolverDataAcoustic solverData(i1, i2, myRHSTerm, pnGlobal, rhsElement,
                                    rhsWeights);
-  	std::ofstream out;
-    if (snapshot > 0)
-        out.open("results.csv", std::ios::app);
-    
+  std::ofstream out;
+  if (snapshot > 0) out.open("results.csv", std::ios::app);
 
-    if (snapshot > 0 && !out)
-        std::cerr << "Error: cannot open results.txt\n";
-    // --- 🆕 AJOUT : écrire les paramètres au début du fichier ---
-    // if (snapshot > 0 && out) {
-    //     out << "# Simulation parameters\n";
-    //     out << "# ex=" << nb_elements_[0] << "\n";
-    //     out << "# ey=" << nb_elements_[1] << "\n";
-    //     out << "# ez=" << nb_elements_[2] << "\n";
-    //     out << "# order=" << m_mesh->getOrder() << "\n";
-    //     out << "# dt=" << dt_ << "\n";
-    //     out << "# timemax=" << timemax_ << "\n";
-    //     out << "# src=(" << src_coord_[0] << "," << src_coord_[1] << "," << src_coord_[2] << ")\n";
-    //     out << "# rcv=(" << rcv_coord_[0] << "," << rcv_coord_[1] << "," << rcv_coord_[2] << ")\n";
-    //     out << "# Columns: Step, Elem, i, j, k, X, Y, Z, pnGlobal\n\n";
-    // }
-    out << "Step,X,Y,Z,pnGlobal\n";
+  if (snapshot > 0 && !out) std::cerr << "Error: cannot open results.txt\n";
+  // --- 🆕 AJOUT : écrire les paramètres au début du fichier ---
+  // if (snapshot > 0 && out) {
+  //     out << "# Simulation parameters\n";
+  //     out << "# ex=" << nb_elements_[0] << "\n";
+  //     out << "# ey=" << nb_elements_[1] << "\n";
+  //     out << "# ez=" << nb_elements_[2] << "\n";
+  //     out << "# order=" << m_mesh->getOrder() << "\n";
+  //     out << "# dt=" << dt_ << "\n";
+  //     out << "# timemax=" << timemax_ << "\n";
+  //     out << "# src=(" << src_coord_[0] << "," << src_coord_[1] << "," <<
+  //     src_coord_[2] << ")\n"; out << "# rcv=(" << rcv_coord_[0] << "," <<
+  //     rcv_coord_[1] << "," << rcv_coord_[2] << ")\n"; out << "# Columns:
+  //     Step, Elem, i, j, k, X, Y, Z, pnGlobal\n\n";
+  // }
+  out << "Step,X,Y,Z,pnGlobal\n";
   for (int indexTimeSample = 0; indexTimeSample < num_sample_;
        indexTimeSample++)
   {
@@ -184,19 +183,20 @@ void SEMproxy::run()
                                      pnGlobal, "pnGlobal");
     }
     // --- SNAPSHOT OUTPUT: Step x y z pnGlobal ---
-    if (snapshot > 0 &&
-        indexTimeSample != 0 &&
-        indexTimeSample % snapshot == 0 &&
-        out)  // fichier bien ouvert
+    if (snapshot > 0 && indexTimeSample != 0 &&
+        indexTimeSample % snapshot == 0 && out)  // fichier bien ouvert
     {
-      int ne    = m_mesh->getNumberOfElements();
+      int ne = m_mesh->getNumberOfElements();
       int order = m_mesh->getOrder();
 
-      for (int e = 0; e < ne; ++e) {
-        for (int k = 0; k <= order; ++k) {
-          for (int j = 0; j <= order; ++j) {
-            for (int i = 0; i <= order; ++i) {
-
+      for (int e = 0; e < ne; ++e)
+      {
+        for (int k = 0; k <= order; ++k)
+        {
+          for (int j = 0; j <= order; ++j)
+          {
+            for (int i = 0; i <= order; ++i)
+            {
               int nodeIdx = m_mesh->globalNodeIndex(e, i, j, k);
 
               float x = m_mesh->nodeCoord(nodeIdx, 0);
@@ -206,35 +206,42 @@ void SEMproxy::run()
               float value = pnGlobal(nodeIdx, i1);
 
               // Step  elem  i  j  k  x  y  z  pnGlobal
-              out << indexTimeSample << ","
+              out << indexTimeSample
+                  << ","
                   // << e   << ","
                   // << i   << "," << j << "," << k << ","
-                  << x   << "," << y << "," << z << ","
-                  << value << "\n";
+                  << x << "," << y << "," << z << "," << value << "\n";
             }
           }
         }
       }
     }
 
-    
-// Save pressure at receiver
-    float varnp1 = 0.0;
-    const int order = m_mesh->getOrder();
-    for(int m = 0;m< num_receivers;m++){
-      varnp1 = pnGlobal(rhsElementRcv[m], i2);
-      float xn = m_mesh->nodeCoord(rhsElementRcv[m], 0);
-      float yn = m_mesh->nodeCoord(rhsElementRcv[m], 1);
-      float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
-      if(indexTimeSample == 0){
-        std::ofstream recv("recev_results_" + std::to_string(m) + ".csv", std::ios::app);
-        recv << "indexTimeSample" << "," << "xn" << "," << "yn" << "," << "zn" << "," << "varnp1" << "\n";
+    if (recv_on == true)
+    {
+      // Save pressure at receiver
+      float varnp1 = 0.0;
+      const int order = m_mesh->getOrder();
+      for (int m = 0; m < num_receivers; m++)
+      {
+        varnp1 = pnGlobal(rhsElementRcv[m], i2);
+        float xn = m_mesh->nodeCoord(rhsElementRcv[m], 0);
+        float yn = m_mesh->nodeCoord(rhsElementRcv[m], 1);
+        float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
+        if (indexTimeSample == 0)
+        {
+          std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
+                             std::ios::app);
+          recv << "indexTimeSample" << "," << "xn" << "," << "yn" << "," << "zn"
+               << "," << "varnp1" << "\n";
+        }
+        std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
+                           std::ios::app);
+        recv << indexTimeSample << "," << xn << "," << yn << "," << zn << ","
+             << varnp1 << "\n";
+        pnAtReceiver(m, indexTimeSample) = varnp1;
       }
-      std::ofstream recv("recev_results_" + std::to_string(m) + ".csv", std::ios::app);
-      recv << indexTimeSample << "," << xn << "," << yn << "," << zn << "," << varnp1 << "\n";
-      pnAtReceiver(m, indexTimeSample) = varnp1;
-      }
-
+    }
     swap(i1, i2);
 
     auto tmp = solverData.m_i1;
@@ -258,66 +265,65 @@ void SEMproxy::run()
   cout << "------------------------------------------------ " << endl;
 }
 
-bool pointInDomain(float x, float y, float z,
-                   float width, float height, float length)
+bool pointInDomain(float x, float y, float z, float width, float height,
+                   float length)
 {
-    return (x >= 0 && x <= width &&
-            y >= 0 && y <= height &&
-            z >= 0 && z <= length);
+  return (x >= 0 && x <= width && y >= 0 && y <= height && z >= 0 &&
+          z <= length);
 }
 
-int countValidPoints(const std::string& filename,
-                     float width, float height, float length)
+int countValidPoints(const std::string& filename, float width, float height,
+                     float length)
 {
-    std::ifstream file(filename);
-    if (!file.is_open()) {
-        return 1;
+  std::ifstream file(filename);
+  if (!file.is_open())
+  {
+    return 1;
+  }
+
+  float x, y, z;
+  int validCount = 0;
+  int lineNumber = 0;
+
+  while (file >> x >> y >> z)
+  {  // Lit 3 valeurs par ligne
+    lineNumber++;
+
+    if (pointInDomain(x, y, z, width, height, length))
+    {
+      validCount++;
     }
+  }
 
-    float x, y, z;
-    int validCount = 0;
-    int lineNumber = 0;
-
-    while (file >> x >> y >> z) {   // Lit 3 valeurs par ligne
-        lineNumber++;
-
-        if (pointInDomain(x, y, z, width, height, length)) {
-            validCount++;
-        }
-    }
-
-    return validCount;
+  return validCount;
 }
-
 
 // Initialize arrays
 void SEMproxy::init_arrays()
 {
-  cout << "Allocate host memory for source and pressure values ..." << recv_file << endl;
-  num_receivers = countValidPoints(recv_file,domain_size_[0],domain_size_[1],domain_size_[2]);
+  cout << "Allocate host memory for source and pressure values ..." << recv_file
+       << endl;
+  num_receivers = countValidPoints(recv_file, domain_size_[0], domain_size_[1],
+                                   domain_size_[2]);
   rhsElement = allocateVector<vectorInt>(myNumberOfRHS, "rhsElement");
   rhsWeights = allocateArray2D<arrayReal>(
       myNumberOfRHS, m_mesh->getNumberOfPointsPerElement(), "RHSWeight");
   myRHSTerm = allocateArray2D<arrayReal>(myNumberOfRHS, num_sample_, "RHSTerm");
   pnGlobal =
       allocateArray2D<arrayReal>(m_mesh->getNumberOfNodes(), 2, "pnGlobal");
-  pnAtReceiver = allocateArray2D<arrayReal>(num_receivers, num_sample_, "pnAtReceiver");
+  pnAtReceiver =
+      allocateArray2D<arrayReal>(num_receivers, num_sample_, "pnAtReceiver");
   // Receiver
   rhsElementRcv = allocateVector<vectorInt>(num_receivers, "rhsElementRcv");
   rhsWeightsRcv = allocateArray2D<arrayReal>(
       num_receivers, m_mesh->getNumberOfPointsPerElement(), "RHSWeightRcv");
 }
 
-
-float intra_distance(float xn ,float yn ,float zn, float x, float y, float z)
+float intra_distance(float xn, float yn, float zn, float x, float y, float z)
 {
-    return std::sqrt(
-        (x - xn) * (x - xn) +
-        (y - yn) * (y - yn) +
-        (z - zn) * (z - zn)
-    );
+  return std::sqrt((x - xn) * (x - xn) + (y - yn) * (y - yn) +
+                   (z - zn) * (z - zn));
 }
-
 
 // Initialize sources
 void SEMproxy::init_source()
@@ -399,12 +405,12 @@ void SEMproxy::init_source()
     default:
       throw std::runtime_error("Unsupported order: " + std::to_string(order));
   }
-  cout << rcv_coord_[0]  << " " << rcv_coord_[1] << endl;
+  cout << rcv_coord_[0] << " " << rcv_coord_[1] << endl;
   // Receiver computation
   int receiver_index = floor((rcv_coord_[0] * ex) / lx) +
                        floor((rcv_coord_[1] * ey) / ly) * ex +
                        floor((rcv_coord_[2] * ez) / lz) * ey * ex;
-  
+
   float bestDist = std::numeric_limits<float>::infinity();
   int bestNode = -1;
 
@@ -412,66 +418,68 @@ void SEMproxy::init_source()
     for (int j : nodes_corner)
       for (int i : nodes_corner)
       {
-          int nodeIdx = m_mesh->globalNodeIndex(receiver_index, i, j, k);
+        int nodeIdx = m_mesh->globalNodeIndex(receiver_index, i, j, k);
 
-          float xn = m_mesh->nodeCoord(nodeIdx, 0);
-          float yn = m_mesh->nodeCoord(nodeIdx, 1);
-          float zn = m_mesh->nodeCoord(nodeIdx, 2);
+        float xn = m_mesh->nodeCoord(nodeIdx, 0);
+        float yn = m_mesh->nodeCoord(nodeIdx, 1);
+        float zn = m_mesh->nodeCoord(nodeIdx, 2);
 
-          float d = intra_distance(xn, yn, zn, rcv_coord_[0], rcv_coord_[1], rcv_coord_[2]);
-          if (d < bestDist) {
-              bestDist = d;
-              bestNode = nodeIdx;
-          }
+        float d = intra_distance(xn, yn, zn, rcv_coord_[0], rcv_coord_[1],
+                                 rcv_coord_[2]);
+        if (d < bestDist)
+        {
+          bestDist = d;
+          bestNode = nodeIdx;
+        }
       }
 
   rhsElementRcv[0] = bestNode;
-  
 
-
-////  switch (order)
-////  {
-//    case 1:
-//      SourceAndReceiverUtils::ComputeRHSWeights<1>(cornerCoordsRcv, rcv_coord_,
-//                                                   rhsWeightsRcv);
-//      break;
-//    case 2:
-//      SourceAndReceiverUtils::ComputeRHSWeights<2>(cornerCoordsRcv, rcv_coord_,
-//                                                   rhsWeightsRcv);
-//      break;
-//    case 3:
-//      SourceAndReceiverUtils::ComputeRHSWeights<3>(cornerCoordsRcv, rcv_coord_,
-//                                                   rhsWeightsRcv);
-//      break;
-//    default:
-//      throw std::runtime_error("Unsupported order: " + std::to_string(order));
-//  }
+  ////  switch (order)
+  ////  {
+  //    case 1:
+  //      SourceAndReceiverUtils::ComputeRHSWeights<1>(cornerCoordsRcv,
+  //      rcv_coord_,
+  //                                                   rhsWeightsRcv);
+  //      break;
+  //    case 2:
+  //      SourceAndReceiverUtils::ComputeRHSWeights<2>(cornerCoordsRcv,
+  //      rcv_coord_,
+  //                                                   rhsWeightsRcv);
+  //      break;
+  //    case 3:
+  //      SourceAndReceiverUtils::ComputeRHSWeights<3>(cornerCoordsRcv,
+  //      rcv_coord_,
+  //                                                   rhsWeightsRcv);
+  //      break;
+  //    default:
+  //      throw std::runtime_error("Unsupported order: " +
+  //      std::to_string(order));
+  //  }
 
   std::ifstream file(recv_file);
-  if (!file.is_open())
-      return;
+  if (!file.is_open()) return;
 
   float x, y, z;
   int validCount = 0;
-  float width = domain_size_[0], height = domain_size_[1], length = domain_size_[2];
+  float width = domain_size_[0], height = domain_size_[1],
+        length = domain_size_[2];
 
   while (file >> x >> y >> z)
   {
-      if (!pointInDomain(x, y, z, width, height, length))
-          continue;
+    if (!pointInDomain(x, y, z, width, height, length)) continue;
 
-      // Element index from coordinates
-      int element = floor((x * ex) / lx) +
-                    floor((y * ey) / ly) * ex +
-                    floor((z * ez) / lz) * ey * ex;
+    // Element index from coordinates
+    int element = floor((x * ex) / lx) + floor((y * ey) / ly) * ex +
+                  floor((z * ez) / lz) * ey * ex;
 
-      float bestDist = std::numeric_limits<float>::infinity();
-      int bestNode = -1;
+    float bestDist = std::numeric_limits<float>::infinity();
+    int bestNode = -1;
 
-      for (int k : nodes_corner)
+    for (int k : nodes_corner)
       for (int j : nodes_corner)
-      for (int i : nodes_corner)
-      {
+        for (int i : nodes_corner)
+        {
           int nodeIdx = m_mesh->globalNodeIndex(element, i, j, k);
 
           float xn = m_mesh->nodeCoord(nodeIdx, 0);
@@ -479,15 +487,15 @@ void SEMproxy::init_source()
           float zn = m_mesh->nodeCoord(nodeIdx, 2);
 
           float d = intra_distance(xn, yn, zn, x, y, z);
-          if (d < bestDist) {
-              bestDist = d;
-              bestNode = nodeIdx;
+          if (d < bestDist)
+          {
+            bestDist = d;
+            bestNode = nodeIdx;
           }
-      }
+        }
 
-      rhsElementRcv[validCount++] = bestNode;
+    rhsElementRcv[validCount++] = bestNode;
   }
-
 }
 
 SolverFactory::implemType SEMproxy::getImplem(string implemArg)

@@ -21,6 +21,9 @@ class SemProxyOptions
   bool autodt = false;
   int snapshot = 0;
   std::string recv_file ="receivers.txt";
+  bool recv_on = false;
+
+
   // sponge boundaries parameters
   float boundaries_size = 0;
   bool surface_sponge = false;
@@ -69,6 +72,8 @@ static void bind_cli(cxxopts::Options& opts, SemProxyOptions& o)
      cxxopts::value<int>(o.snapshot))
 	 ("recv_file", "Size of the step for the snapshot",
      cxxopts::value<std::string>(o.recv_file))
+         ("sismogrammes", " sismogrammes  mode",
+     cxxopts::value<bool>(o.recv_on))
     ("auto-dt", "Select automatique dt via CFL equation.",
      cxxopts::value<bool>(o.autodt))
     ("boundaries-size", "Size of absorbing boundaries (meters)",
