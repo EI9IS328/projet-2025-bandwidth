@@ -30,6 +30,7 @@ SEMproxy::SEMproxy(const SemProxyOptions& opt)
   nb_nodes_[1] = opt.ey * order + 1;
   nb_nodes_[2] = opt.ez * order + 1;
   snapshot = opt.snapshot; // ADDED the SNAPSHOT HERE 
+  recv_file = opt.recv_file;
   const float spongex = opt.boundaries_size;
   const float spongey = opt.boundaries_size;
   const float spongez = opt.boundaries_size;
@@ -266,7 +267,6 @@ int countValidPoints(const std::string& filename,
 {
     std::ifstream file(filename);
     if (!file.is_open()) {
-        std::cerr << "Erreur : impossible d'ouvrir le fichier : " << filename << std::endl;
         return 1;
     }
 
@@ -289,7 +289,7 @@ int countValidPoints(const std::string& filename,
 // Initialize arrays
 void SEMproxy::init_arrays()
 {
-  cout << "Allocate host memory for source and pressure values ..." << endl;
+  cout << "Allocate host memory for source and pressure values ..." << recv_file << endl;
   num_receivers = countValidPoints(recv_file,domain_size_[0],domain_size_[1],domain_size_[2]);
   rhsElement = allocateVector<vectorInt>(myNumberOfRHS, "rhsElement");
   rhsWeights = allocateArray2D<arrayReal>(
@@ -395,37 +395,38 @@ void SEMproxy::init_source()
     default:
       throw std::runtime_error("Unsupported order: " + std::to_string(order));
   }
-
+  cout << rcv_coord_[0]  << " " << rcv_coord_[1] << endl;
   // Receiver computation
   int receiver_index = floor((rcv_coord_[0] * ex) / lx) +
                        floor((rcv_coord_[1] * ey) / ly) * ex +
                        floor((rcv_coord_[2] * ez) / lz) * ey * ex;
+  
+  float bestDist = std::numeric_limits<float>::infinity();
+  int bestNode = -1;
 
-  for (int i = 0; i < 1; i++)
-  {
-    rhsElementRcv[i] = receiver_index;
-  }
-
-  // Get coordinates of the corners of the receiver element
-  float cornerCoordsRcv[8][3];
-  I = 0;
   for (int k : nodes_corner)
-  {
     for (int j : nodes_corner)
-    {
       for (int i : nodes_corner)
       {
-        int nodeIdx = m_mesh->globalNodeIndex(rhsElementRcv[0], i, j, k);
-        cornerCoordsRcv[I][0] = m_mesh->nodeCoord(nodeIdx, 0);
-        cornerCoordsRcv[I][2] = m_mesh->nodeCoord(nodeIdx, 2);
-        cornerCoordsRcv[I][1] = m_mesh->nodeCoord(nodeIdx, 1);
-        I++;
-      }
-    }
-  }
+          int nodeIdx = m_mesh->globalNodeIndex(receiver_index, i, j, k);
 
-//  switch (order)
-//  {
+          float xn = m_mesh->nodeCoord(nodeIdx, 0);
+          float yn = m_mesh->nodeCoord(nodeIdx, 1);
+          float zn = m_mesh->nodeCoord(nodeIdx, 2);
+
+          float d = intra_distance(xn, yn, zn, rcv_coord_[0], rcv_coord_[1], rcv_coord_[2]);
+          if (d < bestDist) {
+              bestDist = d;
+              bestNode = nodeIdx;
+          }
+      }
+
+  rhsElementRcv[0] = bestNode;
+  
+
+
+////  switch (order)
+////  {
 //    case 1:
 //      SourceAndReceiverUtils::ComputeRHSWeights<1>(cornerCoordsRcv, rcv_coord_,
 //                                                   rhsWeightsRcv);
@@ -443,55 +444,46 @@ void SEMproxy::init_source()
 //  }
 
   std::ifstream file(recv_file);
-    if (!file.is_open()) {
-        std::cerr << "Erreur : impossible d'ouvrir le fichier : " << recv_file << std::endl;
-        // Receiver computation
-        int receiver_index = floor((rcv_coord_[0] * ex) / lx) +
-                       floor((rcv_coord_[1] * ey) / ly) * ex +
-                       floor((rcv_coord_[2] * ez) / lz) * ey * ex;
-        
-        rhsElementRcv[0]= receiver_index;
-    }
+  if (!file.is_open())
+      return;
 
-    else {
-      float x, y, z;
-      int validCount = 0;
-      int lineNumber = 0;
-      float width = domain_size_[0],height = domain_size_[1],length = domain_size_[2];
+  float x, y, z;
+  int validCount = 0;
+  float width = domain_size_[0], height = domain_size_[1], length = domain_size_[2];
 
-      while (file >> x >> y >> z) {   // Lit 3 valeurs par ligne
-          lineNumber++;
-          int receiver_index = floor((rcv_coord_[0] * ex) / lx) +
-                       floor((rcv_coord_[1] * ey) / ly) * ex +
-                       floor((rcv_coord_[2] * ez) / lz) * ey * ex;
-        
-          rhsElementRcv[validCount]= receiver_index;
+  while (file >> x >> y >> z)
+  {
+      if (!pointInDomain(x, y, z, width, height, length))
+          continue;
 
-          if (pointInDomain(x, y, z, width, height, length)) {
-              float cornerCoordsRcv[3];
-              float distance = std::numeric_limits<float>::infinity();
-              for (int k : nodes_corner)
-              {
-                for (int j : nodes_corner)
-                {
-                  for (int i : nodes_corner)
-                  {
-                    int nodeIdx = m_mesh->globalNodeIndex(rhsElementRcv[validCount], i, j, k);
-                    float xn = m_mesh->nodeCoord(nodeIdx, 0);
-                    float yn = m_mesh->nodeCoord(nodeIdx, 1);
-                    float zn = m_mesh->nodeCoord(nodeIdx, 2);
-                    if(intra_distance(xn,yn,zn,x,y,z) < distance){
-                      receiver_index = nodeIdx;
-                    }
-                  }
-                }
-              }
+      // Element index from coordinates
+      int element = floor((x * ex) / lx) +
+                    floor((y * ey) / ly) * ex +
+                    floor((z * ez) / lz) * ey * ex;
 
-              rhsElementRcv[validCount]= receiver_index;
-              validCount++;
+      float bestDist = std::numeric_limits<float>::infinity();
+      int bestNode = -1;
+
+      for (int k : nodes_corner)
+      for (int j : nodes_corner)
+      for (int i : nodes_corner)
+      {
+          int nodeIdx = m_mesh->globalNodeIndex(element, i, j, k);
+
+          float xn = m_mesh->nodeCoord(nodeIdx, 0);
+          float yn = m_mesh->nodeCoord(nodeIdx, 1);
+          float zn = m_mesh->nodeCoord(nodeIdx, 2);
+
+          float d = intra_distance(xn, yn, zn, x, y, z);
+          if (d < bestDist) {
+              bestDist = d;
+              bestNode = nodeIdx;
           }
       }
-    }
+
+      rhsElementRcv[validCount++] = bestNode;
+  }
+
 }
 
 SolverFactory::implemType SEMproxy::getImplem(string implemArg)

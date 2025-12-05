@@ -20,7 +20,7 @@ class SemProxyOptions
   float timemax = 1.5;
   bool autodt = false;
   int snapshot = 0;
-  std::string recv_file;
+  std::string recv_file ="receivers.txt";
   // sponge boundaries parameters
   float boundaries_size = 0;
   bool surface_sponge = false;
