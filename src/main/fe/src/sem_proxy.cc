@@ -144,19 +144,23 @@ SEMproxy::SEMproxy(const SemProxyOptions& opt)
 
 void SEMproxy::run()
 {
+  //In-situ statistics variables
+  float minVal = std::numeric_limits<float>::max();
+  float maxVal = std::numeric_limits<float>::lowest();
+
+  using std::chrono::duration_cast;
+  using std::chrono::microseconds;
   using std::chrono::system_clock;
   using std::chrono::time_point;
-  using std::chrono::microseconds;
-  using std::chrono::duration_cast;
 
   // Timers for compute and output
   time_point<system_clock> startComputeTime, startOutputTime;
-  system_clock::duration   totalComputeTime = system_clock::duration::zero();
-  system_clock::duration   totalOutputTime  = system_clock::duration::zero();
+  system_clock::duration totalComputeTime = system_clock::duration::zero();
+  system_clock::duration totalOutputTime = system_clock::duration::zero();
 
   // Extra accumulators (in microseconds) for detailed breakdown
   double snapshotTime_us = 0.0;
-  double sismoTime_us    = 0.0;
+  double sismoTime_us = 0.0;
 
   // Measure total wall-clock of run()
   auto totalStart = system_clock::now();
@@ -166,19 +170,25 @@ void SEMproxy::run()
 
   // Snapshot file (volumetric output)
   std::ofstream out;
-  if (snapshot > 0) {
+  if (snapshot > 0)
+  {
     out.open("results.csv", std::ios::app);
-    if (!out) {
+    if (!out)
+    {
       std::cerr << "Error: cannot open results.csv\n";
-    } else {
+    }
+    else
+    {
       // Write header only if file is empty
-      if (out.tellp() == 0) {
+      if (out.tellp() == 0)
+      {
         out << "Step,X,Y,Z,pnGlobal\n";
       }
     }
   }
 
-  for (int indexTimeSample = 0; indexTimeSample < num_sample_; indexTimeSample++)
+  for (int indexTimeSample = 0; indexTimeSample < num_sample_;
+       indexTimeSample++)
   {
     // =======================
     // 1) Kernel / compute
@@ -201,21 +211,22 @@ void SEMproxy::run()
     }
 
     // --- SNAPSHOT timing + writing ---
-    if (snapshot > 0 &&
-        indexTimeSample != 0 &&
-        indexTimeSample % snapshot == 0 &&
-        out)  // file OK
+    if (snapshot > 0 && indexTimeSample != 0 &&
+        indexTimeSample % snapshot == 0 && out)  // file OK
     {
       auto startSnapshot = system_clock::now();
 
-      int ne    = m_mesh->getNumberOfElements();
+      int ne = m_mesh->getNumberOfElements();
       int order = m_mesh->getOrder();
 
-      for (int e = 0; e < ne; ++e) {
-        for (int k = 0; k <= order; ++k) {
-          for (int j = 0; j <= order; ++j) {
-            for (int i = 0; i <= order; ++i) {
-
+      for (int e = 0; e < ne; ++e)
+      {
+        for (int k = 0; k <= order; ++k)
+        {
+          for (int j = 0; j <= order; ++j)
+          {
+            for (int i = 0; i <= order; ++i)
+            {
               int nodeIdx = m_mesh->globalNodeIndex(e, i, j, k);
 
               float x = m_mesh->nodeCoord(nodeIdx, 0);
@@ -225,326 +236,291 @@ void SEMproxy::run()
               float value = pnGlobal(nodeIdx, i1);
 
               // CSV: Step, X, Y, Z, pnGlobal
-              out << indexTimeSample << ","
-                  << x << "," << y << "," << z << ","
+              out << indexTimeSample << "," << x << "," << y << "," << z << ","
                   << value << "\n";
             }
           }
         }
       }
 
-      auto endSnapshot = system_clock::now();
-      snapshotTime_us +=
-          duration_cast<microseconds>(endSnapshot - startSnapshot).count();
-    }
+      // =======================
+      // 3) In-situ statistics
+      // =======================
+      if (snapshot > 0 && indexTimeSample != 0 &&
+          indexTimeSample % snapshot == 0)
+      {
+        auto startStats = system_clock::now();
 
-    // =======================
-    // 3) Sismo / receivers
-    // =======================
-    if (recv_on && num_receivers > 0)
-    {
-      auto startSismo = system_clock::now();
-
-      float varnp1 = 0.0f;
-
-      for (int m = 0; m < num_receivers; m++) {
-        varnp1 = pnGlobal(rhsElementRcv[m], i2);
-
-        float xn = m_mesh->nodeCoord(rhsElementRcv[m], 0);
-        float yn = m_mesh->nodeCoord(rhsElementRcv[m], 1);
-        float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
-
-        // Write header once per receiver file
-        if (indexTimeSample == 0) {
-          std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
-                             std::ios::app);
-          if (recv.tellp() == 0) {
-            recv << "indexTimeSample,xn,yn,zn,varnp1\n";
-          }
+        int nbNodes = m_mesh->getNumberOfNodes();
+        for (int n = 0; n < nbNodes; ++n)
+        {
+          float v = pnGlobal(n, i1);
+          minVal = std::min(minVal, v);
+          maxVal = std::max(maxVal, v);
         }
 
-        std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
-                           std::ios::app);
-        recv << indexTimeSample << ","
-             << xn << "," << yn << "," << zn << "," << varnp1 << "\n";
 
-        pnAtReceiver(m, indexTimeSample) = varnp1;
+      }
+        auto endStats = system_clock::now();
+
+        auto endSnapshot = system_clock::now();
+        snapshotTime_us +=
+            duration_cast<microseconds>(endSnapshot - startSnapshot).count();
       }
 
-      auto endSismo = system_clock::now();
-      sismoTime_us +=
-          duration_cast<microseconds>(endSismo - startSismo).count();
+      // =======================
+      // 3) Sismo / receivers
+      // =======================
+      if (recv_on && num_receivers > 0)
+      {
+        auto startSismo = system_clock::now();
+
+        float varnp1 = 0.0f;
+
+        for (int m = 0; m < num_receivers; m++)
+        {
+          varnp1 = pnGlobal(rhsElementRcv[m], i2);
+
+          float xn = m_mesh->nodeCoord(rhsElementRcv[m], 0);
+          float yn = m_mesh->nodeCoord(rhsElementRcv[m], 1);
+          float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
+
+          // Write header once per receiver file
+          if (indexTimeSample == 0)
+          {
+            std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
+                               std::ios::app);
+            if (recv.tellp() == 0)
+            {
+              recv << "indexTimeSample,xn,yn,zn,varnp1\n";
+            }
+          }
+
+          std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
+                             std::ios::app);
+          recv << indexTimeSample << "," << xn << "," << yn << "," << zn << ","
+               << varnp1 << "\n";
+
+          pnAtReceiver(m, indexTimeSample) = varnp1;
+        }
+
+        auto endSismo = system_clock::now();
+        sismoTime_us +=
+            duration_cast<microseconds>(endSismo - startSismo).count();
+      }
+
+      // =======================
+      // 4) Swap buffers
+      // =======================
+      std::swap(i1, i2);
+
+      auto tmp = solverData.m_i1;
+      solverData.m_i1 = solverData.m_i2;
+      solverData.m_i2 = tmp;
+
+      totalOutputTime += system_clock::now() - startOutputTime;
     }
 
-    // =======================
-    // 4) Swap buffers
-    // =======================
-    std::swap(i1, i2);
+    auto totalEnd = system_clock::now();
+    double totalRun_us =
+        duration_cast<microseconds>(totalEnd - totalStart).count();
 
-    auto tmp = solverData.m_i1;
-    solverData.m_i1 = solverData.m_i2;
-    solverData.m_i2 = tmp;
+    // Convert to seconds
+    double kerneltime_us =
+        duration_cast<microseconds>(totalComputeTime).count();
+    double outputtime_us = duration_cast<microseconds>(totalOutputTime).count();
 
-    totalOutputTime += system_clock::now() - startOutputTime;
+    double kernel_s = kerneltime_us / 1e6;
+    double output_s = outputtime_us / 1e6;
+    double snapshot_s = snapshotTime_us / 1e6;
+    double sismo_s = sismoTime_us / 1e6;
+    double total_s = totalRun_us / 1e6;
+
+    std::cout << "------------------------------------------------ \n";
+    std::cout << "---- Elapsed Kernel Time   : " << kernel_s << " s\n";
+    std::cout << "---- Elapsed Output Time   : " << output_s << " s\n";
+    std::cout << "----   - Snapshot Time     : " << snapshot_s << " s\n";
+    std::cout << "----   - Sismo Time        : " << sismo_s << " s\n";
+    std::cout << "----   - Min by in-situ     : " << minVal << " s\n";
+    std::cout << "----   - Max by in-situ        : " << maxVal << " s\n";
+    std::cout << "----   - moy by in-situ        : " << meanVal << " s\n";
+    std::cout << "---- Total run() Time      : " << total_s << " s\n";
+    std::cout << "------------------------------------------------ \n";
+
+    // -----------------------------------------
+    // SAVE RUN TIME INFORMATION TO CSV
+    // -----------------------------------------
+    std::ofstream tfile("time_debug.csv", std::ios::app);
+    if (!tfile)
+    {
+      std::cerr << "Error: cannot open time_debug.csv\n";
+    }
+    else
+    {
+      // If file is empty, write CSV header
+      if (tfile.tellp() == 0)
+      {
+        tfile << "ex,ey,ez,snapshot,kernel_s,output_s,snapshot_s,sismo_s,total_"
+                 "s\n";
+      }
+
+      int ex = nb_elements_[0];
+      int ey = nb_elements_[1];
+      int ez = nb_elements_[2];
+
+      tfile << ex << "," << ey << "," << ez << "," << snapshot << ","
+            << kernel_s << "," << output_s << "," << snapshot_s << ","
+            << sismo_s << "," << total_s << "\n";
+    }
   }
 
-  auto totalEnd = system_clock::now();
-  double totalRun_us =
-      duration_cast<microseconds>(totalEnd - totalStart).count();
+  bool pointInDomain(float x, float y, float z, float width, float height,
+                     float length)
+  {
+    return (x >= 0 && x <= width && y >= 0 && y <= height && z >= 0 &&
+            z <= length);
+  }
 
-  // Convert to seconds
-  double kerneltime_us = duration_cast<microseconds>(totalComputeTime).count();
-  double outputtime_us = duration_cast<microseconds>(totalOutputTime).count();
-
-  double kernel_s   = kerneltime_us   / 1e6;
-  double output_s   = outputtime_us   / 1e6;
-  double snapshot_s = snapshotTime_us / 1e6;
-  double sismo_s    = sismoTime_us    / 1e6;
-  double total_s    = totalRun_us     / 1e6;
-
-  std::cout << "------------------------------------------------ \n";
-  std::cout << "---- Elapsed Kernel Time   : " << kernel_s   << " s\n";
-  std::cout << "---- Elapsed Output Time   : " << output_s   << " s\n";
-  std::cout << "----   - Snapshot Time     : " << snapshot_s << " s\n";
-  std::cout << "----   - Sismo Time        : " << sismo_s    << " s\n";
-  std::cout << "---- Total run() Time      : " << total_s    << " s\n";
-  std::cout << "------------------------------------------------ \n";
-
-  // -----------------------------------------
-  // SAVE RUN TIME INFORMATION TO CSV
-  // -----------------------------------------
-  std::ofstream tfile("time_debug.csv", std::ios::app);
-  if (!tfile) {
-    std::cerr << "Error: cannot open time_debug.csv\n";
-  } else {
-    // If file is empty, write CSV header
-    if (tfile.tellp() == 0) {
-      tfile << "ex,ey,ez,snapshot,kernel_s,output_s,snapshot_s,sismo_s,total_s\n";
+  int countValidPoints(const std::string& filename, float width, float height,
+                       float length)
+  {
+    std::ifstream file(filename);
+    if (!file.is_open())
+    {
+      return 1;
     }
 
+    float x, y, z;
+    int validCount = 0;
+    int lineNumber = 0;
+
+    while (file >> x >> y >> z)
+    {  // Lit 3 valeurs par ligne
+      lineNumber++;
+
+      if (pointInDomain(x, y, z, width, height, length))
+      {
+        validCount++;
+      }
+    }
+
+    return validCount;
+  }
+
+  // Initialize arrays
+  void SEMproxy::init_arrays()
+  {
+    cout << "Allocate host memory for source and pressure values ..."
+         << recv_file << endl;
+    num_receivers = countValidPoints(recv_file, domain_size_[0],
+                                     domain_size_[1], domain_size_[2]);
+    rhsElement = allocateVector<vectorInt>(myNumberOfRHS, "rhsElement");
+    rhsWeights = allocateArray2D<arrayReal>(
+        myNumberOfRHS, m_mesh->getNumberOfPointsPerElement(), "RHSWeight");
+    myRHSTerm =
+        allocateArray2D<arrayReal>(myNumberOfRHS, num_sample_, "RHSTerm");
+    pnGlobal =
+        allocateArray2D<arrayReal>(m_mesh->getNumberOfNodes(), 2, "pnGlobal");
+    pnAtReceiver =
+        allocateArray2D<arrayReal>(num_receivers, num_sample_, "pnAtReceiver");
+    // Receiver
+    rhsElementRcv = allocateVector<vectorInt>(num_receivers, "rhsElementRcv");
+    rhsWeightsRcv = allocateArray2D<arrayReal>(
+        num_receivers, m_mesh->getNumberOfPointsPerElement(), "RHSWeightRcv");
+  }
+
+  float intra_distance(float xn, float yn, float zn, float x, float y, float z)
+  {
+    return std::sqrt((x - xn) * (x - xn) + (y - yn) * (y - yn) +
+                     (z - zn) * (z - zn));
+  }
+
+  // Initialize sources
+  void SEMproxy::init_source()
+  {
+    arrayReal myRHSLocation = allocateArray2D<arrayReal>(1, 3, "RHSLocation");
+    // std::cout << "All source are currently are coded on element 50." <<
+    // std::endl;
+    std::cout << "All source are currently are coded on middle element."
+              << std::endl;
     int ex = nb_elements_[0];
     int ey = nb_elements_[1];
     int ez = nb_elements_[2];
 
-    tfile << ex         << ","
-          << ey         << ","
-          << ez         << ","
-          << snapshot   << ","
-          << kernel_s   << ","
-          << output_s   << ","
-          << snapshot_s << ","
-          << sismo_s    << ","
-          << total_s    << "\n";
-  }
-}
+    int lx = domain_size_[0];
+    int ly = domain_size_[1];
+    int lz = domain_size_[2];
 
-bool pointInDomain(float x, float y, float z, float width, float height,
-                   float length)
-{
-  return (x >= 0 && x <= width && y >= 0 && y <= height && z >= 0 &&
-          z <= length);
-}
+    // Get source element index
 
-int countValidPoints(const std::string& filename, float width, float height,
-                     float length)
-{
-  std::ifstream file(filename);
-  if (!file.is_open())
-  {
-    return 1;
-  }
+    int source_index = floor((src_coord_[0] * ex) / lx) +
+                       floor((src_coord_[1] * ey) / ly) * ex +
+                       floor((src_coord_[2] * ez) / lz) * ey * ex;
 
-  float x, y, z;
-  int validCount = 0;
-  int lineNumber = 0;
-
-  while (file >> x >> y >> z)
-  {  // Lit 3 valeurs par ligne
-    lineNumber++;
-
-    if (pointInDomain(x, y, z, width, height, length))
+    for (int i = 0; i < 1; i++)
     {
-      validCount++;
+      rhsElement[i] = source_index;
     }
-  }
 
-  return validCount;
-}
-
-// Initialize arrays
-void SEMproxy::init_arrays()
-{
-  cout << "Allocate host memory for source and pressure values ..." << recv_file
-       << endl;
-  num_receivers = countValidPoints(recv_file, domain_size_[0], domain_size_[1],
-                                   domain_size_[2]);
-  rhsElement = allocateVector<vectorInt>(myNumberOfRHS, "rhsElement");
-  rhsWeights = allocateArray2D<arrayReal>(
-      myNumberOfRHS, m_mesh->getNumberOfPointsPerElement(), "RHSWeight");
-  myRHSTerm = allocateArray2D<arrayReal>(myNumberOfRHS, num_sample_, "RHSTerm");
-  pnGlobal =
-      allocateArray2D<arrayReal>(m_mesh->getNumberOfNodes(), 2, "pnGlobal");
-  pnAtReceiver =
-      allocateArray2D<arrayReal>(num_receivers, num_sample_, "pnAtReceiver");
-  // Receiver
-  rhsElementRcv = allocateVector<vectorInt>(num_receivers, "rhsElementRcv");
-  rhsWeightsRcv = allocateArray2D<arrayReal>(
-      num_receivers, m_mesh->getNumberOfPointsPerElement(), "RHSWeightRcv");
-}
-
-float intra_distance(float xn, float yn, float zn, float x, float y, float z)
-{
-  return std::sqrt((x - xn) * (x - xn) + (y - yn) * (y - yn) +
-                   (z - zn) * (z - zn));
-}
-
-// Initialize sources
-void SEMproxy::init_source()
-{
-  arrayReal myRHSLocation = allocateArray2D<arrayReal>(1, 3, "RHSLocation");
-  // std::cout << "All source are currently are coded on element 50." <<
-  // std::endl;
-  std::cout << "All source are currently are coded on middle element."
-            << std::endl;
-  int ex = nb_elements_[0];
-  int ey = nb_elements_[1];
-  int ez = nb_elements_[2];
-
-  int lx = domain_size_[0];
-  int ly = domain_size_[1];
-  int lz = domain_size_[2];
-
-  // Get source element index
-
-  int source_index = floor((src_coord_[0] * ex) / lx) +
-                     floor((src_coord_[1] * ey) / ly) * ex +
-                     floor((src_coord_[2] * ez) / lz) * ey * ex;
-
-  for (int i = 0; i < 1; i++)
-  {
-    rhsElement[i] = source_index;
-  }
-
-  // Get coordinates of the corners of the sourc element
-  float cornerCoords[8][3];
-  int I = 0;
-  int nodes_corner[2] = {0, m_mesh->getOrder()};
-  for (int k : nodes_corner)
-  {
-    for (int j : nodes_corner)
+    // Get coordinates of the corners of the sourc element
+    float cornerCoords[8][3];
+    int I = 0;
+    int nodes_corner[2] = {0, m_mesh->getOrder()};
+    for (int k : nodes_corner)
     {
-      for (int i : nodes_corner)
+      for (int j : nodes_corner)
       {
-        int nodeIdx = m_mesh->globalNodeIndex(rhsElement[0], i, j, k);
-        cornerCoords[I][0] = m_mesh->nodeCoord(nodeIdx, 0);
-        cornerCoords[I][2] = m_mesh->nodeCoord(nodeIdx, 2);
-        cornerCoords[I][1] = m_mesh->nodeCoord(nodeIdx, 1);
-        I++;
-      }
-    }
-  }
-
-  // initialize source term
-  vector<float> sourceTerm =
-      myUtils.computeSourceTerm(num_sample_, dt_, f0, sourceOrder);
-  for (int j = 0; j < num_sample_; j++)
-  {
-    myRHSTerm(0, j) = sourceTerm[j];
-    if (j % 100 == 0)
-      cout << "Sample " << j << "\t: sourceTerm = " << sourceTerm[j] << endl;
-  }
-
-  // get element number of source term
-  myElementSource = rhsElement[0];
-  cout << "Element number for the source location: " << myElementSource << endl
-       << endl;
-
-  int order = m_mesh->getOrder();
-
-  switch (order)
-  {
-    case 1:
-      SourceAndReceiverUtils::ComputeRHSWeights<1>(cornerCoords, src_coord_,
-                                                   rhsWeights);
-      break;
-    case 2:
-      SourceAndReceiverUtils::ComputeRHSWeights<2>(cornerCoords, src_coord_,
-                                                   rhsWeights);
-      break;
-    case 3:
-      SourceAndReceiverUtils::ComputeRHSWeights<3>(cornerCoords, src_coord_,
-                                                   rhsWeights);
-      break;
-    default:
-      throw std::runtime_error("Unsupported order: " + std::to_string(order));
-  }
-  cout << rcv_coord_[0] << " " << rcv_coord_[1] << endl;
-  // Receiver computation
-  int receiver_index = floor((rcv_coord_[0] * ex) / lx) +
-                       floor((rcv_coord_[1] * ey) / ly) * ex +
-                       floor((rcv_coord_[2] * ez) / lz) * ey * ex;
-
-  float bestDist = std::numeric_limits<float>::infinity();
-  int bestNode = -1;
-
-  for (int k : nodes_corner)
-    for (int j : nodes_corner)
-      for (int i : nodes_corner)
-      {
-        int nodeIdx = m_mesh->globalNodeIndex(receiver_index, i, j, k);
-
-        float xn = m_mesh->nodeCoord(nodeIdx, 0);
-        float yn = m_mesh->nodeCoord(nodeIdx, 1);
-        float zn = m_mesh->nodeCoord(nodeIdx, 2);
-
-        float d = intra_distance(xn, yn, zn, rcv_coord_[0], rcv_coord_[1],
-                                 rcv_coord_[2]);
-        if (d < bestDist)
+        for (int i : nodes_corner)
         {
-          bestDist = d;
-          bestNode = nodeIdx;
+          int nodeIdx = m_mesh->globalNodeIndex(rhsElement[0], i, j, k);
+          cornerCoords[I][0] = m_mesh->nodeCoord(nodeIdx, 0);
+          cornerCoords[I][2] = m_mesh->nodeCoord(nodeIdx, 2);
+          cornerCoords[I][1] = m_mesh->nodeCoord(nodeIdx, 1);
+          I++;
         }
       }
+    }
 
-  rhsElementRcv[0] = bestNode;
+    // initialize source term
+    vector<float> sourceTerm =
+        myUtils.computeSourceTerm(num_sample_, dt_, f0, sourceOrder);
+    for (int j = 0; j < num_sample_; j++)
+    {
+      myRHSTerm(0, j) = sourceTerm[j];
+      if (j % 100 == 0)
+        cout << "Sample " << j << "\t: sourceTerm = " << sourceTerm[j] << endl;
+    }
 
-  ////  switch (order)
-  ////  {
-  //    case 1:
-  //      SourceAndReceiverUtils::ComputeRHSWeights<1>(cornerCoordsRcv,
-  //      rcv_coord_,
-  //                                                   rhsWeightsRcv);
-  //      break;
-  //    case 2:
-  //      SourceAndReceiverUtils::ComputeRHSWeights<2>(cornerCoordsRcv,
-  //      rcv_coord_,
-  //                                                   rhsWeightsRcv);
-  //      break;
-  //    case 3:
-  //      SourceAndReceiverUtils::ComputeRHSWeights<3>(cornerCoordsRcv,
-  //      rcv_coord_,
-  //                                                   rhsWeightsRcv);
-  //      break;
-  //    default:
-  //      throw std::runtime_error("Unsupported order: " +
-  //      std::to_string(order));
-  //  }
+    // get element number of source term
+    myElementSource = rhsElement[0];
+    cout << "Element number for the source location: " << myElementSource
+         << endl
+         << endl;
 
-  std::ifstream file(recv_file);
-  if (!file.is_open()) return;
+    int order = m_mesh->getOrder();
 
-  float x, y, z;
-  int validCount = 0;
-  float width = domain_size_[0], height = domain_size_[1],
-        length = domain_size_[2];
-
-  while (file >> x >> y >> z)
-  {
-    if (!pointInDomain(x, y, z, width, height, length)) continue;
-
-    // Element index from coordinates
-    int element = floor((x * ex) / lx) + floor((y * ey) / ly) * ex +
-                  floor((z * ez) / lz) * ey * ex;
+    switch (order)
+    {
+      case 1:
+        SourceAndReceiverUtils::ComputeRHSWeights<1>(cornerCoords, src_coord_,
+                                                     rhsWeights);
+        break;
+      case 2:
+        SourceAndReceiverUtils::ComputeRHSWeights<2>(cornerCoords, src_coord_,
+                                                     rhsWeights);
+        break;
+      case 3:
+        SourceAndReceiverUtils::ComputeRHSWeights<3>(cornerCoords, src_coord_,
+                                                     rhsWeights);
+        break;
+      default:
+        throw std::runtime_error("Unsupported order: " + std::to_string(order));
+    }
+    cout << rcv_coord_[0] << " " << rcv_coord_[1] << endl;
+    // Receiver computation
+    int receiver_index = floor((rcv_coord_[0] * ex) / lx) +
+                         floor((rcv_coord_[1] * ey) / ly) * ex +
+                         floor((rcv_coord_[2] * ez) / lz) * ey * ex;
 
     float bestDist = std::numeric_limits<float>::infinity();
     int bestNode = -1;
@@ -553,13 +529,14 @@ void SEMproxy::init_source()
       for (int j : nodes_corner)
         for (int i : nodes_corner)
         {
-          int nodeIdx = m_mesh->globalNodeIndex(element, i, j, k);
+          int nodeIdx = m_mesh->globalNodeIndex(receiver_index, i, j, k);
 
           float xn = m_mesh->nodeCoord(nodeIdx, 0);
           float yn = m_mesh->nodeCoord(nodeIdx, 1);
           float zn = m_mesh->nodeCoord(nodeIdx, 2);
 
-          float d = intra_distance(xn, yn, zn, x, y, z);
+          float d = intra_distance(xn, yn, zn, rcv_coord_[0], rcv_coord_[1],
+                                   rcv_coord_[2]);
           if (d < bestDist)
           {
             bestDist = d;
@@ -567,43 +544,104 @@ void SEMproxy::init_source()
           }
         }
 
-    rhsElementRcv[validCount++] = bestNode;
+    rhsElementRcv[0] = bestNode;
+
+    ////  switch (order)
+    ////  {
+    //    case 1:
+    //      SourceAndReceiverUtils::ComputeRHSWeights<1>(cornerCoordsRcv,
+    //      rcv_coord_,
+    //                                                   rhsWeightsRcv);
+    //      break;
+    //    case 2:
+    //      SourceAndReceiverUtils::ComputeRHSWeights<2>(cornerCoordsRcv,
+    //      rcv_coord_,
+    //                                                   rhsWeightsRcv);
+    //      break;
+    //    case 3:
+    //      SourceAndReceiverUtils::ComputeRHSWeights<3>(cornerCoordsRcv,
+    //      rcv_coord_,
+    //                                                   rhsWeightsRcv);
+    //      break;
+    //    default:
+    //      throw std::runtime_error("Unsupported order: " +
+    //      std::to_string(order));
+    //  }
+
+    std::ifstream file(recv_file);
+    if (!file.is_open()) return;
+
+    float x, y, z;
+    int validCount = 0;
+    float width = domain_size_[0], height = domain_size_[1],
+          length = domain_size_[2];
+
+    while (file >> x >> y >> z)
+    {
+      if (!pointInDomain(x, y, z, width, height, length)) continue;
+
+      // Element index from coordinates
+      int element = floor((x * ex) / lx) + floor((y * ey) / ly) * ex +
+                    floor((z * ez) / lz) * ey * ex;
+
+      float bestDist = std::numeric_limits<float>::infinity();
+      int bestNode = -1;
+
+      for (int k : nodes_corner)
+        for (int j : nodes_corner)
+          for (int i : nodes_corner)
+          {
+            int nodeIdx = m_mesh->globalNodeIndex(element, i, j, k);
+
+            float xn = m_mesh->nodeCoord(nodeIdx, 0);
+            float yn = m_mesh->nodeCoord(nodeIdx, 1);
+            float zn = m_mesh->nodeCoord(nodeIdx, 2);
+
+            float d = intra_distance(xn, yn, zn, x, y, z);
+            if (d < bestDist)
+            {
+              bestDist = d;
+              bestNode = nodeIdx;
+            }
+          }
+
+      rhsElementRcv[validCount++] = bestNode;
+    }
   }
-}
 
-SolverFactory::implemType SEMproxy::getImplem(string implemArg)
-{
-  if (implemArg == "makutu") return SolverFactory::MAKUTU;
-  if (implemArg == "shiva") return SolverFactory::SHIVA;
+  SolverFactory::implemType SEMproxy::getImplem(string implemArg)
+  {
+    if (implemArg == "makutu") return SolverFactory::MAKUTU;
+    if (implemArg == "shiva") return SolverFactory::SHIVA;
 
-  throw std::invalid_argument(
-      "Implentation type does not follow any valid type.");
-}
+    throw std::invalid_argument(
+        "Implentation type does not follow any valid type.");
+  }
 
-SolverFactory::meshType SEMproxy::getMesh(string meshArg)
-{
-  if (meshArg == "cartesian") return SolverFactory::Struct;
-  if (meshArg == "ucartesian") return SolverFactory::Unstruct;
+  SolverFactory::meshType SEMproxy::getMesh(string meshArg)
+  {
+    if (meshArg == "cartesian") return SolverFactory::Struct;
+    if (meshArg == "ucartesian") return SolverFactory::Unstruct;
 
-  std::cout << "Mesh type found is " << meshArg << std::endl;
-  throw std::invalid_argument("Mesh type does not follow any valid type.");
-}
+    std::cout << "Mesh type found is " << meshArg << std::endl;
+    throw std::invalid_argument("Mesh type does not follow any valid type.");
+  }
 
-SolverFactory::methodType SEMproxy::getMethod(string methodArg)
-{
-  if (methodArg == "sem") return SolverFactory::SEM;
-  if (methodArg == "dg") return SolverFactory::DG;
+  SolverFactory::methodType SEMproxy::getMethod(string methodArg)
+  {
+    if (methodArg == "sem") return SolverFactory::SEM;
+    if (methodArg == "dg") return SolverFactory::DG;
 
-  throw std::invalid_argument("Method type does not follow any valid type.");
-}
+    throw std::invalid_argument("Method type does not follow any valid type.");
+  }
 
-float SEMproxy::find_cfl_dt(float cfl_factor)
-{
-  float sqrtDim3 = 1.73;  // to change for 2d
-  float min_spacing = m_mesh->getMinSpacing();
-  float v_max = m_mesh->getMaxSpeed();
+  float SEMproxy::find_cfl_dt(float cfl_factor)
+  {
+    float sqrtDim3 = 1.73;  // to change for 2d
+    float min_spacing = m_mesh->getMinSpacing();
+    float v_max = m_mesh->getMaxSpeed();
 
-  float dt = cfl_factor * min_spacing / (sqrtDim3 * v_max);
+    float dt = cfl_factor * min_spacing / (sqrtDim3 * v_max);
 
-  return dt;
-}
+    return dt;
+  }
