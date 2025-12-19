@@ -5,8 +5,6 @@
 //
 //************************************************************************
 
-#include "sem_proxy.h"
-
 #include <cartesian_struct_builder.h>
 #include <cartesian_unstruct_builder.h>
 #include <sem_solver_acoustic.h>
@@ -18,7 +16,106 @@
 #include <sstream>
 #include <variant>
 
+#include "sem_proxy.h"
+
 using namespace SourceAndReceiverUtils;
+
+struct RGB
+{
+  unsigned char r, g, b;
+};
+
+RGB colormap(float v)
+{
+  v = std::max(-1.0f, std::min(1.0f, v));
+  if (v < 0)
+    return {0, static_cast<unsigned char>(255 * (1 + v)), 255};
+  else
+    return {255, static_cast<unsigned char>(255 * (1 - v)), 0};
+}
+
+void writePPMSliceXY(const std::string& filename, arrayReal& pnGlobal,
+                     int timeIndex, int kSlice, model::Model* mesh)
+{
+  int order = mesh->getOrder();
+  int nx = mesh->getNbElementsX() * order + 1;
+  int ny = mesh->getNbElementsY() * order + 1;
+
+  std::ofstream ppm(filename, std::ios::binary);
+  ppm << "P6\n" << nx << " " << ny << "\n255\n";
+
+  float minV = 1e30f, maxV = -1e30f;
+
+  for (int j = 0; j < ny; j++)
+    for (int i = 0; i < nx; i++)
+    {
+      int node = mesh->nodeIndex(i, j, kSlice);
+      float v = pnGlobal(node, timeIndex);
+      minV = std::min(minV, v);
+      maxV = std::max(maxV, v);
+    }
+
+  float invRange = (maxV > minV) ? 1.0f / (maxV - minV) : 1.0f;
+
+  for (int j = 0; j < ny; j++)
+  {
+    for (int i = 0; i < nx; i++)
+    {
+      int node = mesh->nodeIndex(i, j, kSlice);
+      float v = pnGlobal(node, timeIndex);
+      float vn = 2.0f * (v - minV) * invRange - 1.0f;
+      RGB c = colormap(vn);
+      ppm.write(reinterpret_cast<char*>(&c), 3);
+    }
+  }
+}
+
+// ====================== COMPRESSION ===========================
+
+float computeRMSE(const std::vector<float>& a, const std::vector<float>& b)
+{
+  float err = 0.0f;
+  for (size_t i = 0; i < a.size(); i++) err += (a[i] - b[i]) * (a[i] - b[i]);
+  return std::sqrt(err / a.size());
+}
+
+void quantizeSnapshot(const std::vector<float>& input,
+                      std::vector<uint16_t>& output, float& minV, float& maxV,
+                      int nbits)
+{
+  minV = *std::min_element(input.begin(), input.end());
+  maxV = *std::max_element(input.begin(), input.end());
+
+  int levels = (1 << nbits) - 1;
+  output.resize(input.size());
+
+  for (size_t i = 0; i < input.size(); i++)
+  {
+    float norm = (input[i] - minV) / (maxV - minV);
+    output[i] = static_cast<uint16_t>(norm * levels);
+  }
+}
+
+std::vector<std::pair<uint16_t, uint16_t>> RLEencode(
+    const std::vector<uint16_t>& data)
+{
+  std::vector<std::pair<uint16_t, uint16_t>> out;
+
+  uint16_t val = data[0], count = 1;
+  for (size_t i = 1; i < data.size(); i++)
+  {
+    if (data[i] == val && count < 65535)
+      count++;
+    else
+    {
+      out.emplace_back(val, count);
+      val = data[i];
+      count = 1;
+    }
+  }
+  out.emplace_back(val, count);
+  return out;
+}
 
 SEMproxy::SEMproxy(const SemProxyOptions& opt)
 {
@@ -144,19 +241,19 @@ SEMproxy::SEMproxy(const SemProxyOptions& opt)
 
 void SEMproxy::run()
 {
+  using std::chrono::duration_cast;
+  using std::chrono::microseconds;
   using std::chrono::system_clock;
   using std::chrono::time_point;
-  using std::chrono::microseconds;
-  using std::chrono::duration_cast;
 
   // Timers for compute and output
   time_point<system_clock> startComputeTime, startOutputTime;
-  system_clock::duration   totalComputeTime = system_clock::duration::zero();
-  system_clock::duration   totalOutputTime  = system_clock::duration::zero();
+  system_clock::duration totalComputeTime = system_clock::duration::zero();
+  system_clock::duration totalOutputTime = system_clock::duration::zero();
 
   // Extra accumulators (in microseconds) for detailed breakdown
   double snapshotTime_us = 0.0;
-  double sismoTime_us    = 0.0;
+  double sismoTime_us = 0.0;
 
   // Measure total wall-clock of run()
   auto totalStart = system_clock::now();
@@ -166,19 +263,25 @@ void SEMproxy::run()
 
   // Snapshot file (volumetric output)
   std::ofstream out;
-  if (snapshot > 0) {
+  if (snapshot > 0)
+  {
     out.open("results.csv", std::ios::app);
-    if (!out) {
+    if (!out)
+    {
       std::cerr << "Error: cannot open results.csv\n";
-    } else {
+    }
+    else
+    {
       // Write header only if file is empty
-      if (out.tellp() == 0) {
+      if (out.tellp() == 0)
+      {
         out << "Step,X,Y,Z,pnGlobal\n";
       }
     }
   }
 
-  for (int indexTimeSample = 0; indexTimeSample < num_sample_; indexTimeSample++)
+  for (int indexTimeSample = 0; indexTimeSample < num_sample_;
+       indexTimeSample++)
   {
     // =======================
     // 1) Kernel / compute
@@ -200,22 +303,31 @@ void SEMproxy::run()
                                      pnGlobal, "pnGlobal");
     }
 
+    if (snapshot > 0 && indexTimeSample % snapshot == 0)
+    {
+      int kz = m_mesh->getNbElementsZ() * m_mesh->getOrder() / 2;
+      std::string fname =
+          "slice_xy_t" + std::to_string(indexTimeSample) + ".ppm";
+      writePPMSliceXY(fname, pnGlobal, i1, kz, m_mesh.get());
+    }
+
     // --- SNAPSHOT timing + writing ---
-    if (snapshot > 0 &&
-        indexTimeSample != 0 &&
-        indexTimeSample % snapshot == 0 &&
-        out)  // file OK
+    if (snapshot > 0 && indexTimeSample != 0 &&
+        indexTimeSample % snapshot == 0 && out)  // file OK
     {
       auto startSnapshot = system_clock::now();
 
-      int ne    = m_mesh->getNumberOfElements();
+      int ne = m_mesh->getNumberOfElements();
       int order = m_mesh->getOrder();
 
-      for (int e = 0; e < ne; ++e) {
-        for (int k = 0; k <= order; ++k) {
-          for (int j = 0; j <= order; ++j) {
-            for (int i = 0; i <= order; ++i) {
-
+      for (int e = 0; e < ne; ++e)
+      {
+        for (int k = 0; k <= order; ++k)
+        {
+          for (int j = 0; j <= order; ++j)
+          {
+            for (int i = 0; i <= order; ++i)
+            {
               int nodeIdx = m_mesh->globalNodeIndex(e, i, j, k);
 
               float x = m_mesh->nodeCoord(nodeIdx, 0);
@@ -225,8 +337,7 @@ void SEMproxy::run()
               float value = pnGlobal(nodeIdx, i1);
 
               // CSV: Step, X, Y, Z, pnGlobal
-              out << indexTimeSample << ","
-                  << x << "," << y << "," << z << ","
+              out << indexTimeSample << "," << x << "," << y << "," << z << ","
                   << value << "\n";
             }
           }
@@ -237,7 +348,31 @@ void SEMproxy::run()
       snapshotTime_us +=
           duration_cast<microseconds>(endSnapshot - startSnapshot).count();
     }
+    // ===== TP3 : Quantification + RMSE =====
+    if (snapshot > 0 && indexTimeSample != 0 && indexTimeSample % snapshot == 0)
+    {
+      std::vector<float> original;
+      std::vector<float> reconstructed;
+      std::vector<uint16_t> quantized;
 
+      int nbNodes = m_mesh->getNumberOfNodes();
+      original.reserve(nbNodes);
+
+      for (int n = 0; n < nbNodes; n++) original.push_back(pnGlobal(n, i1));
+
+      float minV, maxV;
+      int nbits = 8;  // <- test 8 / 16 / 32 bits
+
+      quantizeSnapshot(original, quantized, minV, maxV, nbits);
+      dequantizeSnapshot(quantized, reconstructed, minV, maxV, nbits);
+
+      float rmse = computeRMSE(original, reconstructed);
+
+      std::ofstream errFile("quantization_error.csv", std::ios::app);
+      if (errFile.tellp() == 0) errFile << "timeStep,nbits,rmse\n";
+
+      errFile << indexTimeSample << "," << nbits << "," << rmse << "\n";
+    }
     // =======================
     // 3) Sismo / receivers
     // =======================
@@ -247,7 +382,8 @@ void SEMproxy::run()
 
       float varnp1 = 0.0f;
 
-      for (int m = 0; m < num_receivers; m++) {
+      for (int m = 0; m < num_receivers; m++)
+      {
         varnp1 = pnGlobal(rhsElementRcv[m], i2);
 
         float xn = m_mesh->nodeCoord(rhsElementRcv[m], 0);
@@ -255,18 +391,20 @@ void SEMproxy::run()
         float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
 
         // Write header once per receiver file
-        if (indexTimeSample == 0) {
+        if (indexTimeSample == 0)
+        {
           std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
                              std::ios::app);
-          if (recv.tellp() == 0) {
+          if (recv.tellp() == 0)
+          {
             recv << "indexTimeSample,xn,yn,zn,varnp1\n";
           }
         }
 
         std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
                            std::ios::app);
-        recv << indexTimeSample << ","
-             << xn << "," << yn << "," << zn << "," << varnp1 << "\n";
+        recv << indexTimeSample << "," << xn << "," << yn << "," << zn << ","
+             << varnp1 << "\n";
 
         pnAtReceiver(m, indexTimeSample) = varnp1;
       }
@@ -296,45 +434,44 @@ void SEMproxy::run()
   double kerneltime_us = duration_cast<microseconds>(totalComputeTime).count();
   double outputtime_us = duration_cast<microseconds>(totalOutputTime).count();
 
-  double kernel_s   = kerneltime_us   / 1e6;
-  double output_s   = outputtime_us   / 1e6;
+  double kernel_s = kerneltime_us / 1e6;
+  double output_s = outputtime_us / 1e6;
   double snapshot_s = snapshotTime_us / 1e6;
-  double sismo_s    = sismoTime_us    / 1e6;
-  double total_s    = totalRun_us     / 1e6;
+  double sismo_s = sismoTime_us / 1e6;
+  double total_s = totalRun_us / 1e6;
 
   std::cout << "------------------------------------------------ \n";
-  std::cout << "---- Elapsed Kernel Time   : " << kernel_s   << " s\n";
-  std::cout << "---- Elapsed Output Time   : " << output_s   << " s\n";
+  std::cout << "---- Elapsed Kernel Time   : " << kernel_s << " s\n";
+  std::cout << "---- Elapsed Output Time   : " << output_s << " s\n";
   std::cout << "----   - Snapshot Time     : " << snapshot_s << " s\n";
-  std::cout << "----   - Sismo Time        : " << sismo_s    << " s\n";
-  std::cout << "---- Total run() Time      : " << total_s    << " s\n";
+  std::cout << "----   - Sismo Time        : " << sismo_s << " s\n";
+  std::cout << "---- Total run() Time      : " << total_s << " s\n";
   std::cout << "------------------------------------------------ \n";
 
   // -----------------------------------------
   // SAVE RUN TIME INFORMATION TO CSV
   // -----------------------------------------
   std::ofstream tfile("time_debug.csv", std::ios::app);
-  if (!tfile) {
+  if (!tfile)
+  {
     std::cerr << "Error: cannot open time_debug.csv\n";
-  } else {
+  }
+  else
+  {
     // If file is empty, write CSV header
-    if (tfile.tellp() == 0) {
-      tfile << "ex,ey,ez,snapshot,kernel_s,output_s,snapshot_s,sismo_s,total_s\n";
+    if (tfile.tellp() == 0)
+    {
+      tfile
+          << "ex,ey,ez,snapshot,kernel_s,output_s,snapshot_s,sismo_s,total_s\n";
     }
 
     int ex = nb_elements_[0];
     int ey = nb_elements_[1];
     int ez = nb_elements_[2];
 
-    tfile << ex         << ","
-          << ey         << ","
-          << ez         << ","
-          << snapshot   << ","
-          << kernel_s   << ","
-          << output_s   << ","
-          << snapshot_s << ","
-          << sismo_s    << ","
-          << total_s    << "\n";
+    tfile << ex << "," << ey << "," << ez << "," << snapshot << "," << kernel_s
+          << "," << output_s << "," << snapshot_s << "," << sismo_s << ","
+          << total_s << "\n";
   }
 }
 
