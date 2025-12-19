@@ -7,6 +7,7 @@
 
 #include <cartesian_struct_builder.h>
 #include <cartesian_unstruct_builder.h>
+#include <model.h>
 #include <sem_solver_acoustic.h>
 #include <source_and_receiver_utils.h>
 
@@ -34,39 +35,57 @@ RGB colormap(float v)
     return {255, static_cast<unsigned char>(255 * (1 - v)), 0};
 }
 
-void writePPMSliceXY(const std::string& filename, arrayReal& pnGlobal,
-                     int timeIndex, int kSlice, model::Model* mesh)
+void writePPMSliceXY_single(const std::string& filename, arrayReal& pnGlobal,
+                            model::ModelApi<float, int>* mesh)
 {
   int order = mesh->getOrder();
-  int nx = mesh->getNbElementsX() * order + 1;
-  int ny = mesh->getNbElementsY() * order + 1;
+  int nx = mesh->getNumberOfElements() * order + 1;
+  int ny = mesh->getNumberOfElements() * order + 1;
+
+  int kSlice = mesh->getNumberOfElements() * order / 2;  // slice centrale
 
   std::ofstream ppm(filename, std::ios::binary);
   ppm << "P6\n" << nx << " " << ny << "\n255\n";
 
   float minV = 1e30f, maxV = -1e30f;
 
+  // trouver min et max sur la slice
   for (int j = 0; j < ny; j++)
     for (int i = 0; i < nx; i++)
     {
-      int node = mesh->nodeIndex(i, j, kSlice);
-      float v = pnGlobal(node, timeIndex);
+      int node = mesh->globalNodeIndex(0, i, j, kSlice);
+      float v = pnGlobal(node, 0);  // ici timestep 0 ou dernier timestep
       minV = std::min(minV, v);
       maxV = std::max(maxV, v);
     }
 
   float invRange = (maxV > minV) ? 1.0f / (maxV - minV) : 1.0f;
 
+  // écrire la slice
   for (int j = 0; j < ny; j++)
   {
     for (int i = 0; i < nx; i++)
     {
-      int node = mesh->nodeIndex(i, j, kSlice);
-      float v = pnGlobal(node, timeIndex);
+      int node = mesh->globalNodeIndex(0, i, j, kSlice);
+      float v = pnGlobal(node, 0);
       float vn = 2.0f * (v - minV) * invRange - 1.0f;
       RGB c = colormap(vn);
       ppm.write(reinterpret_cast<char*>(&c), 3);
     }
+  }
+}
+
+// Ajout de dequantizeSnapshot
+void dequantizeSnapshot(const std::vector<uint16_t>& input,
+                        std::vector<float>& output, float minV, float maxV,
+                        int nbits)
+{
+  int levels = (1 << nbits) - 1;
+  output.resize(input.size());
+  for (size_t i = 0; i < input.size(); i++)
+  {
+    float norm = static_cast<float>(input[i]) / levels;
+    output[i] = minV + norm * (maxV - minV);
   }
 }
 
@@ -272,7 +291,6 @@ void SEMproxy::run()
     }
     else
     {
-      // Write header only if file is empty
       if (out.tellp() == 0)
       {
         out << "Step,X,Y,Z,pnGlobal\n";
@@ -287,9 +305,7 @@ void SEMproxy::run()
     // 1) Kernel / compute
     // =======================
     startComputeTime = system_clock::now();
-
     m_solver->computeOneStep(dt_, indexTimeSample, solverData);
-
     totalComputeTime += system_clock::now() - startComputeTime;
 
     // =======================
@@ -303,12 +319,10 @@ void SEMproxy::run()
                                      pnGlobal, "pnGlobal");
     }
 
-    if (snapshot > 0 && indexTimeSample % snapshot == 0)
+    // Après la boucle for (int indexTimeSample = 0; ...) // run()
+    if (snapshot > 0 && )
     {
-      int kz = m_mesh->getNbElementsZ() * m_mesh->getOrder() / 2;
-      std::string fname =
-          "slice_xy_t" + std::to_string(indexTimeSample) + ".ppm";
-      writePPMSliceXY(fname, pnGlobal, i1, kz, m_mesh.get());
+      writePPMSliceXY_single("slice_xy.ppm", pnGlobal, m_mesh.get());
     }
 
     // --- SNAPSHOT timing + writing ---
@@ -336,7 +350,6 @@ void SEMproxy::run()
 
               float value = pnGlobal(nodeIdx, i1);
 
-              // CSV: Step, X, Y, Z, pnGlobal
               out << indexTimeSample << "," << x << "," << y << "," << z << ","
                   << value << "\n";
             }
@@ -348,6 +361,7 @@ void SEMproxy::run()
       snapshotTime_us +=
           duration_cast<microseconds>(endSnapshot - startSnapshot).count();
     }
+
     // ===== TP3 : Quantification + RMSE =====
     if (snapshot > 0 && indexTimeSample != 0 && indexTimeSample % snapshot == 0)
     {
@@ -373,13 +387,13 @@ void SEMproxy::run()
 
       errFile << indexTimeSample << "," << nbits << "," << rmse << "\n";
     }
+
     // =======================
     // 3) Sismo / receivers
     // =======================
     if (recv_on && num_receivers > 0)
     {
       auto startSismo = system_clock::now();
-
       float varnp1 = 0.0f;
 
       for (int m = 0; m < num_receivers; m++)
@@ -390,15 +404,11 @@ void SEMproxy::run()
         float yn = m_mesh->nodeCoord(rhsElementRcv[m], 1);
         float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
 
-        // Write header once per receiver file
         if (indexTimeSample == 0)
         {
           std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
                              std::ios::app);
-          if (recv.tellp() == 0)
-          {
-            recv << "indexTimeSample,xn,yn,zn,varnp1\n";
-          }
+          if (recv.tellp() == 0) recv << "indexTimeSample,xn,yn,zn,varnp1\n";
         }
 
         std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
@@ -430,7 +440,6 @@ void SEMproxy::run()
   double totalRun_us =
       duration_cast<microseconds>(totalEnd - totalStart).count();
 
-  // Convert to seconds
   double kerneltime_us = duration_cast<microseconds>(totalComputeTime).count();
   double outputtime_us = duration_cast<microseconds>(totalOutputTime).count();
 
@@ -448,22 +457,13 @@ void SEMproxy::run()
   std::cout << "---- Total run() Time      : " << total_s << " s\n";
   std::cout << "------------------------------------------------ \n";
 
-  // -----------------------------------------
   // SAVE RUN TIME INFORMATION TO CSV
-  // -----------------------------------------
   std::ofstream tfile("time_debug.csv", std::ios::app);
-  if (!tfile)
+  if (tfile)
   {
-    std::cerr << "Error: cannot open time_debug.csv\n";
-  }
-  else
-  {
-    // If file is empty, write CSV header
     if (tfile.tellp() == 0)
-    {
       tfile
           << "ex,ey,ez,snapshot,kernel_s,output_s,snapshot_s,sismo_s,total_s\n";
-    }
 
     int ex = nb_elements_[0];
     int ey = nb_elements_[1];
