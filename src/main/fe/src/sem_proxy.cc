@@ -12,13 +12,42 @@
 #include <sem_solver_acoustic.h>
 #include <source_and_receiver_utils.h>
 
+#include <algorithm>
 #include <cxxopts.hpp>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <variant>
 
 using namespace SourceAndReceiverUtils;
+
+void saveSlicePPM(const std::string& filename,
+                  const std::vector<float>& sliceValues, int nx, int ny,
+                  float minVal, float maxVal)
+{
+  std::ofstream ppm(filename, std::ios::binary);
+  ppm << "P6\n" << nx << " " << ny << "\n255\n";
+
+  for (int j = 0; j < ny; ++j)
+  {
+    for (int i = 0; i < nx; ++i)
+    {
+      float val = sliceValues[j * nx + i];
+      // Normalisation locale ou globale
+      float normalized = (val - minVal) / (maxVal - minVal);
+      normalized = std::clamp(normalized, 0.0f, 1.0f);
+
+      // Exemple de colormap simple : jet-like (bleu → rouge)
+      unsigned char r = static_cast<unsigned char>(255 * normalized);
+      unsigned char g = 0;
+      unsigned char b = static_cast<unsigned char>(255 * (1 - normalized));
+
+      ppm << r << g << b;
+    }
+  }
+  ppm.close();
+}
 
 SEMproxy::SEMproxy(const SemProxyOptions& opt)
 {
@@ -193,29 +222,24 @@ void SEMproxy::run()
     // =======================
     // SLICE PARAMETERS
     // =======================
-
-    // Slice plane: XY plane at source height
-    const float z_slice = src_coord_[2];
-
-    // Dominant wave period
-    const float T0 = 1.0f / f0;
-
-    // Output one slice every N periods
+    const float z_slice = src_coord_[2];  // plan XY à la hauteur de la source
+    const float T0 = 1.0f / f0;           // période dominante
     const float periods_per_slice = 5.0f;
     const int slice_every =
         std::max(1, static_cast<int>((periods_per_slice * T0) / dt_));
-
-    // Geometric tolerance (mesh dependent)
-    float tol = 0.5f * m_mesh->getMinSpacing();
+    const float tol = 0.5f * m_mesh->getMinSpacing();  // tolérance pour plan
     // =======================
     // SLICE OUTPUT (XY plane)
     // =======================
     // Écrire les slices uniquement à partir du step 1
     if (indexTimeSample > 0 && indexTimeSample % slice_every == 0)
     {
+      int nx = nb_nodes_[0];  // nombre de noeuds sur X
+      int ny = nb_nodes_[1];  // nombre de noeuds sur Y
+      std::vector<float> sliceValues(nx * ny, 0.0f);
+
       std::ofstream sliceFile;
 
-      // Créer le fichier et l'en-tête uniquement au premier step utile
       if (indexTimeSample == slice_every)
       {
         sliceFile.open("slice_xy.csv");
@@ -226,23 +250,61 @@ void SEMproxy::run()
         sliceFile.open("slice_xy.csv", std::ios::app);
       }
 
-      int nbNodes = m_mesh->getNumberOfNodes();
-      for (int n = 0; n < nbNodes; ++n)
-      {
-        float x = m_mesh->nodeCoord(n, 0);
-        float y = m_mesh->nodeCoord(n, 1);
-        float z = m_mesh->nodeCoord(n, 2);
+      float tol = 0.5f * m_mesh->getMinSpacing();
 
-        // Sélection des noeuds proches du plan
-        if (std::abs(z - z_slice) < tol)
+      int idx = 0;
+      for (int j = 0; j < ny; ++j)
+      {
+        for (int i = 0; i < nx; ++i)
         {
-          float value = pnGlobal(n, i1);
+          float minDist = std::numeric_limits<float>::infinity();
+          int bestNode = -1;
+
+          // Recherche du noeud le plus proche du plan z_slice
+          for (int n = 0; n < m_mesh->getNumberOfNodes(); ++n)
+          {
+            float xn = m_mesh->nodeCoord(n, 0);
+            float yn = m_mesh->nodeCoord(n, 1);
+            float zn = m_mesh->nodeCoord(n, 2);
+
+            if (std::abs(zn - z_slice) < tol)
+            {
+              float dx =
+                  xn - m_mesh->nodeCoord(i, 0);  // si structuré, i -> index X
+              float dy = yn - m_mesh->nodeCoord(j, 1);  // j -> index Y
+              float dist = std::sqrt(dx * dx + dy * dy);
+
+              if (dist < minDist)
+              {
+                minDist = dist;
+                bestNode = n;
+              }
+            }
+          }
+
+          if (bestNode == -1)
+            throw std::runtime_error("No node found near XY plane at z_slice");
+
+          float value = pnGlobal(bestNode, i1);
+          sliceValues[idx++] = value;
+
+          // Écriture CSV
+          float x = m_mesh->nodeCoord(bestNode, 0);
+          float y = m_mesh->nodeCoord(bestNode, 1);
           sliceFile << indexTimeSample << "," << x << "," << y << "," << value
                     << "\n";
         }
       }
 
       sliceFile.close();
+
+      float sliceMin =
+          *std::min_element(sliceValues.begin(), sliceValues.end());
+      float sliceMax =
+          *std::max_element(sliceValues.begin(), sliceValues.end());
+
+      saveSlicePPM("slice_xy_" + std::to_string(indexTimeSample) + ".ppm",
+                   sliceValues, nx, ny, sliceMin, sliceMax);
     }
 
     // =======================
