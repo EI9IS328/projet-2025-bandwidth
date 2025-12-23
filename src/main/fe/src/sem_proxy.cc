@@ -61,6 +61,7 @@ SEMproxy::SEMproxy(const SemProxyOptions& opt)
   snapshot = opt.snapshot;  // ADDED the SNAPSHOT HERE
   recv_file = opt.recv_file;
   recv_on = opt.recv_on;
+  ad_hoc = opt.ad_hoc;
   const float spongex = opt.boundaries_size;
   const float spongey = opt.boundaries_size;
   const float spongez = opt.boundaries_size;
@@ -176,6 +177,14 @@ void SEMproxy::run()
   // In-situ statistics variables
   float minVal = std::numeric_limits<float>::max();
   float maxVal = std::numeric_limits<float>::lowest();
+  float minPreRecv[num_receivers];
+  float maxPreRecv[num_receivers];
+  float meanRecv[num_receivers];
+  for(int m = 0;m < num_receivers;m++){
+    minPreRecv[m] = std::numeric_limits<float>::max();
+    maxPreRecv[m] = std::numeric_limits<float>::lowest();
+    meanRecv[m]   = 0.0f;
+  }
 
   using std::chrono::duration_cast;
   using std::chrono::microseconds;
@@ -305,10 +314,9 @@ void SEMproxy::run()
 
       saveSlicePPM("slice_xy_" + std::to_string(indexTimeSample) + ".ppm",
                    sliceValues, nx, ny, sliceMin, sliceMax);
-    }
-
-    // =======================
-    // 1) Kernel / compute
+    }    
+    //=======================
+    //1) Kernel / compute
     // =======================
     startComputeTime = system_clock::now();
 
@@ -333,54 +341,58 @@ void SEMproxy::run()
     {
       auto startSnapshot = system_clock::now();
 
-      int ne = m_mesh->getNumberOfElements();
-      int order = m_mesh->getOrder();
+      if(ad_hoc){
 
-      for (int e = 0; e < ne; ++e)
-      {
-        for (int k = 0; k <= order; ++k)
+        int ne = m_mesh->getNumberOfElements();
+        int order = m_mesh->getOrder();
+
+        for (int e = 0; e < ne; ++e)
         {
-          for (int j = 0; j <= order; ++j)
+          for (int k = 0; k <= order; ++k)
           {
-            for (int i = 0; i <= order; ++i)
+            for (int j = 0; j <= order; ++j)
             {
-              int nodeIdx = m_mesh->globalNodeIndex(e, i, j, k);
+              for (int i = 0; i <= order; ++i)
+              {
+                int nodeIdx = m_mesh->globalNodeIndex(e, i, j, k);
 
-              float x = m_mesh->nodeCoord(nodeIdx, 0);
-              float y = m_mesh->nodeCoord(nodeIdx, 1);
-              float z = m_mesh->nodeCoord(nodeIdx, 2);
+                float x = m_mesh->nodeCoord(nodeIdx, 0);
+                float y = m_mesh->nodeCoord(nodeIdx, 1);
+                float z = m_mesh->nodeCoord(nodeIdx, 2);
 
-              float value = pnGlobal(nodeIdx, i1);
+                float value = pnGlobal(nodeIdx, i1);
 
-              // CSV: Step, X, Y, Z, pnGlobal
-              out << indexTimeSample << "," << x << "," << y << "," << z << ","
-                  << value << "\n";
+                // CSV: Step, X, Y, Z, pnGlobal
+                out << indexTimeSample << "," << x << "," << y << "," << z << ","
+                    << value << "\n";
+              }
             }
           }
         }
       }
+      else{
 
       // =======================
       // 3) In-situ statistics
       // =======================
-      if (snapshot > 0 && indexTimeSample != 0 &&
-          indexTimeSample % snapshot == 0)
-      {
-        auto startStats = system_clock::now();
-
-        int nbNodes = m_mesh->getNumberOfNodes();
-        for (int n = 0; n < nbNodes; ++n)
+        if (snapshot > 0 && indexTimeSample != 0 &&
+            indexTimeSample % snapshot == 0)
         {
-          float v = pnGlobal(n, i1);
-          minVal = std::min(minVal, v);
-          maxVal = std::max(maxVal, v);
-        }
-      }
-      auto endStats = system_clock::now();
+          auto startStats = system_clock::now();
 
+          int nbNodes = m_mesh->getNumberOfNodes();
+          for (int n = 0; n < nbNodes; ++n)
+          {
+            float v = pnGlobal(n, i1);
+            minVal = std::min(minVal, v);
+            maxVal = std::max(maxVal, v);
+          }
+        }
+        auto endStats = system_clock::now();
+      }
       auto endSnapshot = system_clock::now();
-      snapshotTime_us +=
-          duration_cast<microseconds>(endSnapshot - startSnapshot).count();
+        snapshotTime_us +=
+            duration_cast<microseconds>(endSnapshot - startSnapshot).count();
     }
 
     // =======================
@@ -400,21 +412,38 @@ void SEMproxy::run()
         float yn = m_mesh->nodeCoord(rhsElementRcv[m], 1);
         float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
 
-        // Write header once per receiver file
-        if (indexTimeSample == 0)
-        {
+        if(recv_file != ""){
+          if (indexTimeSample == 0)
+          {
+            std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
+                               std::ios::app);
+            if (recv.tellp() == 0)
+            {
+              recv << "indexTimeSample,xn,yn,zn,varnp1\n";
+            }
+          }
+
           std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
                              std::ios::app);
-          if (recv.tellp() == 0)
-          {
-            recv << "indexTimeSample,xn,yn,zn,varnp1\n";
-          }
-        }
-
-        std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
-                           std::ios::app);
-        recv << indexTimeSample << "," << xn << "," << yn << "," << zn << ","
+          recv << indexTimeSample << "," << xn << "," << yn << "," << zn << ","
              << varnp1 << "\n";
+        }
+        else{
+          std::cout << "---------------- "<< varnp1 << "-------------------------------- \n";
+          minPreRecv[m] = std::min(varnp1,minPreRecv[m]);
+          maxPreRecv[m] = std::max(varnp1,maxPreRecv[m]);
+          std::cout << "---------------- "<< minPreRecv[m] << " " << maxPreRecv[m] << "-------------------------------- \n";
+          if(indexTimeSample == num_sample_ - 1){
+            meanRecv[m] += varnp1;
+            meanRecv[m] /= static_cast<float>(num_sample_);
+          }
+          else{
+            meanRecv[m] += varnp1;
+          }
+
+
+          
+        }
 
         pnAtReceiver(m, indexTimeSample) = varnp1;
       }
@@ -454,9 +483,19 @@ void SEMproxy::run()
   std::cout << "---- Elapsed Kernel Time   : " << kernel_s << " s\n";
   std::cout << "---- Elapsed Output Time   : " << output_s << " s\n";
   std::cout << "----   - Snapshot Time     : " << snapshot_s << " s\n";
-  std::cout << "----   - Sismo Time        : " << sismo_s << " s\n";
   std::cout << "----   - Min by in-situ     : " << minVal << " s\n";
   std::cout << "----   - Max by in-situ        : " << maxVal << " s\n";
+  std::cout << "------------------------------------------------ \n";
+
+  for(int i = 0; i< num_receivers;i++){
+    std::cout << "------------------------------------------------ \n";
+    std::cout << "----   - Min pressure of receiver "<< i<< " by in-situ     : " << minPreRecv[i] << " s\n";
+    std::cout << "----   - Max pressure of receiver "<< i<< " by in-situ     : " << maxPreRecv[i] << " s\n";
+    std::cout << "----   - Mean pressure of receiver "<< i<< " by in-situ     : " << meanRecv[i] << " s\n";
+    std::cout << "------------------------------------------------ \n";
+  }
+  std::cout << "----   - Sismo Time        : " << sismo_s << " s\n";
+  std::cout << "------------------------------------------------ \n";
   std::cout << "---- Total run() Time      : " << total_s << " s\n";
   std::cout << "------------------------------------------------ \n";
 

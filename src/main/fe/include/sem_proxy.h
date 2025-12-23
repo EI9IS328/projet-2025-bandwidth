@@ -93,6 +93,7 @@ class SEMproxy
   int snap_time_interval_;
   std::string snap_folder_;
   bool recv_on;
+  bool ad_hoc;
   int snapshot;
   // physics
   bool isElastic_;
