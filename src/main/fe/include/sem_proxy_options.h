@@ -23,6 +23,7 @@ class SemProxyOptions
   std::string recv_file ="";
   bool recv_on = false;
   bool ad_hoc = false;
+  bool slices = false;
 
 
   // sponge boundaries parameters
@@ -85,10 +86,13 @@ static void bind_cli(cxxopts::Options& opts, SemProxyOptions& o)
      cxxopts::value<bool>(o.surface_sponge))
     ("taper-delta", "Taper delta for sponge boundaries value",
      cxxopts::value<float>(o.taper_delta))
+    ("slices", " slices mode",
+     cxxopts::value<bool>(o.slices))
     ("is-model-on-nodes",
      "Boolean to tell if the model is charged on nodes (true) or on element (false)",
      cxxopts::value<bool>(o.isModelOnNodes))
     ("is-elastic", "Elastic simulation",
      cxxopts::value<bool>(o.isElastic));
+     ;
 }
 };

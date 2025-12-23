@@ -62,6 +62,7 @@ SEMproxy::SEMproxy(const SemProxyOptions& opt)
   recv_file = opt.recv_file;
   recv_on = opt.recv_on;
   ad_hoc = opt.ad_hoc;
+  slices = opt.slices;
   const float spongex = opt.boundaries_size;
   const float spongey = opt.boundaries_size;
   const float spongez = opt.boundaries_size;
@@ -241,7 +242,7 @@ void SEMproxy::run()
     // SLICE OUTPUT (XY plane)
     // =======================
     // Écrire les slices uniquement à partir du step 1
-    if (indexTimeSample > 0 && indexTimeSample % slice_every == 0)
+    if (indexTimeSample > 0 && indexTimeSample % slice_every == 0 && slices == true)
     {
       int nx = nb_nodes_[0];  // nombre de noeuds sur X
       int ny = nb_nodes_[1];  // nombre de noeuds sur Y

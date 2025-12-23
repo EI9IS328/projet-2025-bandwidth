@@ -95,6 +95,8 @@ class SEMproxy
   bool recv_on;
   bool ad_hoc;
   int snapshot;
+  // slices
+  bool slices;
   // physics
   bool isElastic_;
   std::string recv_file;
