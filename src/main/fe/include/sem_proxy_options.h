@@ -25,6 +25,7 @@ class SemProxyOptions
   bool ad_hoc = false;
   bool slices = false;
   bool quantification = false;
+  bool RLE = false;
 
   // sponge boundaries parameters
   float boundaries_size = 0;
@@ -94,7 +95,9 @@ static void bind_cli(cxxopts::Options& opts, SemProxyOptions& o)
     ("is-elastic", "Elastic simulation",
      cxxopts::value<bool>(o.isElastic))
      ("quantification", " Compression with loss",
-     cxxopts::value<bool>(o.quantification));
+     cxxopts::value<bool>(o.quantification))
+     ("RLE", " Run-Length Encoding (without loss)",
+     cxxopts::value<bool>(o.RLE));
      ;
 }
 };

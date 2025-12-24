@@ -20,15 +20,59 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <utility>
 #include <variant>
+#include <vector>
 using namespace SourceAndReceiverUtils;
 
+struct RLEPair
+{
+  uint16_t value;
+  uint32_t count;
+};
 struct QuantizationMeta
 {
   float minVal;
   float maxVal;
   int nBits;
 };
+
+// Fonction de compression RLE
+std::vector<RLEPair> RLE_compress(const std::vector<uint16_t>& data)
+{
+  std::vector<RLEPair> compressed;
+  if (data.empty()) return compressed;
+
+  uint16_t current = data[0];
+  uint32_t count = 1;
+
+  for (size_t i = 1; i < data.size(); ++i)
+  {
+    if (data[i] == current)
+    {
+      ++count;
+    }
+    else
+    {
+      compressed.push_back({current, count});
+      current = data[i];
+      count = 1;
+    }
+  }
+  compressed.push_back({current, count});
+  return compressed;
+}
+
+// Écriture binaire compressée
+void writeRLE(const std::string& filename,
+              const std::vector<RLEPair>& compressed,
+              const QuantizationMeta& qmeta)
+{
+  std::ofstream out(filename, std::ios::binary);
+  out.write(reinterpret_cast<const char*>(&qmeta), sizeof(qmeta));
+  out.write(reinterpret_cast<const char*>(compressed.data()),
+            compressed.size() * sizeof(RLEPair));
+}
 
 inline uint32_t quantize(float value, const QuantizationMeta& meta)
 {
@@ -103,6 +147,7 @@ SEMproxy::SEMproxy(const SemProxyOptions& opt)
   recv_on = opt.recv_on;
   ad_hoc = opt.ad_hoc;
   slices = opt.slices;
+  RLE = opt.RLE;
   quantification = opt.quantification;
   const float spongex = opt.boundaries_size;
   const float spongey = opt.boundaries_size;
@@ -482,6 +527,31 @@ void SEMproxy::run()
     }
 
     // =======================
+    //  Run-Length Encoding (RLE)
+    // =======================
+    if (snapshot > 0 && indexTimeSample != 0 &&
+        indexTimeSample % snapshot == 0 && !ad_hoc && RLE)
+    {
+      int nbNodes = m_mesh->getNumberOfNodes();
+      QuantizationMeta qmeta{minVal, maxVal, 16};
+
+      std::vector<uint16_t> quantizedValues(nbNodes);
+      for (int n = 0; n < nbNodes; ++n)
+        quantizedValues[n] = quantize(pnGlobal(n, i1), qmeta);
+
+      // Quantification déjà faite : quantizedValues
+      auto rleData = RLE_compress(quantizedValues);
+      writeRLE("snapshot_quant_rle.bin", rleData, qmeta);
+
+      // --- Mesure du taux de compression ---
+      size_t originalSize = quantizedValues.size() * sizeof(uint16_t);
+      size_t compressedSize = rleData.size() * sizeof(RLEPair);
+      double compressionRatio =
+          static_cast<double>(originalSize) / compressedSize;
+      std::cout << "Compression ratio: " << compressionRatio << "\n";
+    }
+
+    // =======================
     // 3) Sismo / receivers
     // =======================
     if (recv_on && num_receivers > 0)
@@ -567,6 +637,7 @@ void SEMproxy::run()
   double snapshot_s = snapshotTime_us / 1e6;
   double sismo_s = sismoTime_us / 1e6;
   double total_s = totalRun_us / 1e6;
+
 
   std::cout << "------------------------------------------------ \n";
   std::cout << "---- Elapsed Kernel Time   : " << kernel_s << " s\n";
