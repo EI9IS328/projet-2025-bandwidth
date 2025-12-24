@@ -97,6 +97,8 @@ class SEMproxy
   int snapshot;
   // slices
   bool slices;
+
+  bool quantification;
   // physics
   bool isElastic_;
   std::string recv_file;

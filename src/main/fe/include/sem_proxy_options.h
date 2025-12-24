@@ -24,7 +24,7 @@ class SemProxyOptions
   bool recv_on = false;
   bool ad_hoc = false;
   bool slices = false;
-
+  bool quantification = false;
 
   // sponge boundaries parameters
   float boundaries_size = 0;
@@ -92,7 +92,9 @@ static void bind_cli(cxxopts::Options& opts, SemProxyOptions& o)
      "Boolean to tell if the model is charged on nodes (true) or on element (false)",
      cxxopts::value<bool>(o.isModelOnNodes))
     ("is-elastic", "Elastic simulation",
-     cxxopts::value<bool>(o.isElastic));
+     cxxopts::value<bool>(o.isElastic))
+     ("quantification", " Compression with loss",
+     cxxopts::value<bool>(o.quantification));
      ;
 }
 };

@@ -13,14 +13,54 @@
 #include <source_and_receiver_utils.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <cxxopts.hpp>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <variant>
-
 using namespace SourceAndReceiverUtils;
+
+struct QuantizationMeta
+{
+  float minVal;
+  float maxVal;
+  int nBits;
+};
+
+inline uint32_t quantize(float value, const QuantizationMeta& meta)
+{
+  float clamped = std::min(std::max(value, meta.minVal), meta.maxVal);
+  float normalized = (clamped - meta.minVal) / (meta.maxVal - meta.minVal);
+  uint32_t maxInt = (1u << meta.nBits) - 1;
+  return static_cast<uint32_t>(std::round(normalized * maxInt));
+}
+
+inline float dequantize(uint32_t qValue, const QuantizationMeta& meta)
+{
+  uint32_t maxInt = (1u << meta.nBits) - 1;
+  float normalized = static_cast<float>(qValue) / static_cast<float>(maxInt);
+  return meta.minVal + normalized * (meta.maxVal - meta.minVal);
+}
+
+float computeRMSE(const std::vector<float>& original,
+                  const std::vector<float>& reconstructed)
+{
+  if (original.size() != reconstructed.size())
+  {
+    throw std::runtime_error("Vectors must have the same size");
+  }
+  float mse = 0.0f;
+  for (size_t i = 0; i < original.size(); ++i)
+  {
+    float diff = original[i] - reconstructed[i];
+    mse += diff * diff;
+  }
+  mse /= static_cast<float>(original.size());
+  return std::sqrt(mse);
+}
 
 void saveSlicePPM(const std::string& filename,
                   const std::vector<float>& sliceValues, int nx, int ny,
@@ -63,6 +103,7 @@ SEMproxy::SEMproxy(const SemProxyOptions& opt)
   recv_on = opt.recv_on;
   ad_hoc = opt.ad_hoc;
   slices = opt.slices;
+  quantification = opt.quantification;
   const float spongex = opt.boundaries_size;
   const float spongey = opt.boundaries_size;
   const float spongez = opt.boundaries_size;
@@ -181,10 +222,11 @@ void SEMproxy::run()
   float minPreRecv[num_receivers];
   float maxPreRecv[num_receivers];
   float meanRecv[num_receivers];
-  for(int m = 0;m < num_receivers;m++){
+  for (int m = 0; m < num_receivers; m++)
+  {
     minPreRecv[m] = std::numeric_limits<float>::max();
     maxPreRecv[m] = std::numeric_limits<float>::lowest();
-    meanRecv[m]   = 0.0f;
+    meanRecv[m] = 0.0f;
   }
 
   using std::chrono::duration_cast;
@@ -242,7 +284,8 @@ void SEMproxy::run()
     // SLICE OUTPUT (XY plane)
     // =======================
     // Écrire les slices uniquement à partir du step 1
-    if (indexTimeSample > 0 && indexTimeSample % slice_every == 0 && slices == true)
+    if (indexTimeSample > 0 && indexTimeSample % slice_every == 0 &&
+        slices == true)
     {
       int nx = nb_nodes_[0];  // nombre de noeuds sur X
       int ny = nb_nodes_[1];  // nombre de noeuds sur Y
@@ -315,9 +358,9 @@ void SEMproxy::run()
 
       saveSlicePPM("slice_xy_" + std::to_string(indexTimeSample) + ".ppm",
                    sliceValues, nx, ny, sliceMin, sliceMax);
-    }    
+    }
     //=======================
-    //1) Kernel / compute
+    // 1) Kernel / compute
     // =======================
     startComputeTime = system_clock::now();
 
@@ -342,8 +385,8 @@ void SEMproxy::run()
     {
       auto startSnapshot = system_clock::now();
 
-      if(ad_hoc){
-
+      if (ad_hoc)
+      {
         int ne = m_mesh->getNumberOfElements();
         int order = m_mesh->getOrder();
 
@@ -364,18 +407,18 @@ void SEMproxy::run()
                 float value = pnGlobal(nodeIdx, i1);
 
                 // CSV: Step, X, Y, Z, pnGlobal
-                out << indexTimeSample << "," << x << "," << y << "," << z << ","
-                    << value << "\n";
+                out << indexTimeSample << "," << x << "," << y << "," << z
+                    << "," << value << "\n";
               }
             }
           }
         }
       }
-      else{
-
-      // =======================
-      // 3) In-situ statistics
-      // =======================
+      else
+      {
+        // =======================
+        // 3) In-situ statistics
+        // =======================
         if (snapshot > 0 && indexTimeSample != 0 &&
             indexTimeSample % snapshot == 0)
         {
@@ -392,8 +435,50 @@ void SEMproxy::run()
         auto endStats = system_clock::now();
       }
       auto endSnapshot = system_clock::now();
-        snapshotTime_us +=
-            duration_cast<microseconds>(endSnapshot - startSnapshot).count();
+      snapshotTime_us +=
+          duration_cast<microseconds>(endSnapshot - startSnapshot).count();
+    }
+
+    // =======================
+    //  SNAPSHOT QUANTIZATION (ADD-ON)
+    // =======================
+    if (snapshot > 0 && indexTimeSample != 0 &&
+        indexTimeSample % snapshot == 0 && !ad_hoc && quantification)
+    {
+      int nbNodes = m_mesh->getNumberOfNodes();
+
+      QuantizationMeta qmeta;
+      qmeta.minVal = minVal;
+      qmeta.maxVal = maxVal;
+      qmeta.nBits = 16;
+
+      std::vector<float> original(nbNodes);
+      for (int n = 0; n < nbNodes; ++n)
+      {
+        original[n] = pnGlobal(n, i1);
+      }
+      // quantification
+      std::vector<uint16_t> quantizedValues(nbNodes);
+      for (int n = 0; n < nbNodes; ++n)
+      {
+        float value = pnGlobal(n, i1);
+        quantizedValues[n] = quantize(value, qmeta);
+      }
+      // Reconstruction
+      std::vector<float> reconstructed(nbNodes);
+      for (int n = 0; n < nbNodes; ++n)
+      {
+        reconstructed[n] = dequantize(quantizedValues[n], qmeta);
+      }
+      // Calcul de la RMSE
+      float rmse = computeRMSE(original, reconstructed);
+      std::cout << "RMSE after quantization: " << rmse << std::endl;
+
+      // Écrire dans le fichier binaire
+      std::ofstream outQuant("snapshot_quant.bin", std::ios::binary);
+      outQuant.write(reinterpret_cast<char*>(&qmeta), sizeof(qmeta));
+      outQuant.write(reinterpret_cast<char*>(quantizedValues.data()),
+                     quantizedValues.size() * sizeof(uint16_t));
     }
 
     // =======================
@@ -413,7 +498,8 @@ void SEMproxy::run()
         float yn = m_mesh->nodeCoord(rhsElementRcv[m], 1);
         float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
 
-        if(recv_file != ""){
+        if (recv_file != "")
+        {
           if (indexTimeSample == 0)
           {
             std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
@@ -427,23 +513,25 @@ void SEMproxy::run()
           std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
                              std::ios::app);
           recv << indexTimeSample << "," << xn << "," << yn << "," << zn << ","
-             << varnp1 << "\n";
+               << varnp1 << "\n";
         }
-        else{
-          std::cout << "---------------- "<< varnp1 << "-------------------------------- \n";
-          minPreRecv[m] = std::min(varnp1,minPreRecv[m]);
-          maxPreRecv[m] = std::max(varnp1,maxPreRecv[m]);
-          std::cout << "---------------- "<< minPreRecv[m] << " " << maxPreRecv[m] << "-------------------------------- \n";
-          if(indexTimeSample == num_sample_ - 1){
+        else
+        {
+          std::cout << "---------------- " << varnp1
+                    << "-------------------------------- \n";
+          minPreRecv[m] = std::min(varnp1, minPreRecv[m]);
+          maxPreRecv[m] = std::max(varnp1, maxPreRecv[m]);
+          std::cout << "---------------- " << minPreRecv[m] << " "
+                    << maxPreRecv[m] << "-------------------------------- \n";
+          if (indexTimeSample == num_sample_ - 1)
+          {
             meanRecv[m] += varnp1;
             meanRecv[m] /= static_cast<float>(num_sample_);
           }
-          else{
+          else
+          {
             meanRecv[m] += varnp1;
           }
-
-
-          
         }
 
         pnAtReceiver(m, indexTimeSample) = varnp1;
@@ -488,11 +576,15 @@ void SEMproxy::run()
   std::cout << "----   - Max by in-situ        : " << maxVal << " s\n";
   std::cout << "------------------------------------------------ \n";
 
-  for(int i = 0; i< num_receivers;i++){
+  for (int i = 0; i < num_receivers; i++)
+  {
     std::cout << "------------------------------------------------ \n";
-    std::cout << "----   - Min pressure of receiver "<< i<< " by in-situ     : " << minPreRecv[i] << " s\n";
-    std::cout << "----   - Max pressure of receiver "<< i<< " by in-situ     : " << maxPreRecv[i] << " s\n";
-    std::cout << "----   - Mean pressure of receiver "<< i<< " by in-situ     : " << meanRecv[i] << " s\n";
+    std::cout << "----   - Min pressure of receiver " << i
+              << " by in-situ     : " << minPreRecv[i] << " s\n";
+    std::cout << "----   - Max pressure of receiver " << i
+              << " by in-situ     : " << maxPreRecv[i] << " s\n";
+    std::cout << "----   - Mean pressure of receiver " << i
+              << " by in-situ     : " << meanRecv[i] << " s\n";
     std::cout << "------------------------------------------------ \n";
   }
   std::cout << "----   - Sismo Time        : " << sismo_s << " s\n";
