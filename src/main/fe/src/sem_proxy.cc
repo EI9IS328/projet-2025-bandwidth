@@ -653,20 +653,22 @@ void SEMproxy::run()
   std::cout << "---- Elapsed Kernel Time   : " << kernel_s << " s\n";
   std::cout << "---- Elapsed Output Time   : " << output_s << " s\n";
   std::cout << "----   - Snapshot Time     : " << snapshot_s << " s\n";
-  std::cout << "----   - Min by in-situ     : " << minVal << " s\n";
-  std::cout << "----   - Max by in-situ        : " << maxVal << " s\n";
-  std::cout << "------------------------------------------------ \n";
+  if(!ad_hoc){
+    std::cout << "----   - Min by in-situ     : " << minVal << " s\n";
+    std::cout << "----   - Max by in-situ        : " << maxVal << " s\n";
+    std::cout << "------------------------------------------------ \n";
 
-  for (int i = 0; i < num_receivers; i++)
-  {
-    std::cout << "------------------------------------------------ \n";
-    std::cout << "----   - Min pressure of receiver " << i
-              << " by in-situ     : " << minPreRecv[i] << " s\n";
-    std::cout << "----   - Max pressure of receiver " << i
-              << " by in-situ     : " << maxPreRecv[i] << " s\n";
-    std::cout << "----   - Mean pressure of receiver " << i
-              << " by in-situ     : " << meanRecv[i] << " s\n";
-    std::cout << "------------------------------------------------ \n";
+    for (int i = 0; i < num_receivers; i++)
+    {
+      std::cout << "------------------------------------------------ \n";
+      std::cout << "----   - Min pressure of receiver " << i
+                << " by in-situ     : " << minPreRecv[i] << " s\n";
+      std::cout << "----   - Max pressure of receiver " << i
+                << " by in-situ     : " << maxPreRecv[i] << " s\n";
+      std::cout << "----   - Mean pressure of receiver " << i
+                << " by in-situ     : " << meanRecv[i] << " s\n";
+      std::cout << "------------------------------------------------ \n";
+    }
   }
   std::cout << "----   - Sismo Time        : " << sismo_s << " s\n";
   std::cout << "------------------------------------------------ \n";
