@@ -295,6 +295,7 @@ void SEMproxy::run()
                                    rhsWeights);
 
   // Snapshot file (volumetric output)
+  startOutputTime = system_clock::now();
   std::ofstream out;
   if (snapshot > 0)
   {
@@ -312,6 +313,7 @@ void SEMproxy::run()
       }
     }
   }
+  totalOutputTime += system_clock::now() - startOutputTime;
 
   for (int indexTimeSample = 0; indexTimeSample < num_sample_;
        indexTimeSample++)
@@ -423,7 +425,7 @@ void SEMproxy::run()
       m_solver->outputSolutionValues(indexTimeSample, i1, rhsElement[0],
                                      pnGlobal, "pnGlobal");
     }
-
+    totalOutputTime += system_clock::now() - startOutputTime;
     // --- SNAPSHOT timing + writing ---
     if (snapshot > 0 && indexTimeSample != 0 &&
         indexTimeSample % snapshot == 0 && out)  // file OK
@@ -450,10 +452,11 @@ void SEMproxy::run()
                 float z = m_mesh->nodeCoord(nodeIdx, 2);
 
                 float value = pnGlobal(nodeIdx, i1);
-
+                startOutputTime = system_clock::now();
                 // CSV: Step, X, Y, Z, pnGlobal
                 out << indexTimeSample << "," << x << "," << y << "," << z
                     << "," << value << "\n";
+                totalOutputTime += system_clock::now() - startOutputTime;
               }
             }
           }
@@ -564,35 +567,10 @@ void SEMproxy::run()
       {
         varnp1 = pnGlobal(rhsElementRcv[m], i2);
 
-        float xn = m_mesh->nodeCoord(rhsElementRcv[m], 0);
-        float yn = m_mesh->nodeCoord(rhsElementRcv[m], 1);
-        float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
-
-        if (recv_file != "")
+        if (!ad_hoc)
         {
-          if (indexTimeSample == 0)
-          {
-            std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
-                               std::ios::app);
-            if (recv.tellp() == 0)
-            {
-              recv << "indexTimeSample,xn,yn,zn,varnp1\n";
-            }
-          }
-
-          std::ofstream recv("recev_results_" + std::to_string(m) + ".csv",
-                             std::ios::app);
-          recv << indexTimeSample << "," << xn << "," << yn << "," << zn << ","
-               << varnp1 << "\n";
-        }
-        else
-        {
-          std::cout << "---------------- " << varnp1
-                    << "-------------------------------- \n";
           minPreRecv[m] = std::min(varnp1, minPreRecv[m]);
           maxPreRecv[m] = std::max(varnp1, maxPreRecv[m]);
-          std::cout << "---------------- " << minPreRecv[m] << " "
-                    << maxPreRecv[m] << "-------------------------------- \n";
           if (indexTimeSample == num_sample_ - 1)
           {
             meanRecv[m] += varnp1;
@@ -620,10 +598,42 @@ void SEMproxy::run()
     auto tmp = solverData.m_i1;
     solverData.m_i1 = solverData.m_i2;
     solverData.m_i2 = tmp;
+  }
+  // ============================
+  // 4) Writting sismo in files
+  // ============================
+  if (ad_hoc) {
+    startOutputTime = system_clock::now();
+    for (int m = 0; m < num_receivers; ++m) {
 
+      const float xn = m_mesh->nodeCoord(rhsElementRcv[m], 0);
+      const float yn = m_mesh->nodeCoord(rhsElementRcv[m], 1);
+      const float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
+      
+      const std::string filename = "recev_results_" + std::to_string(m) + ".csv";
+      std::ofstream recv(filename, std::ios::app);
+
+      if (!recv.is_open()) {
+        std::cerr << "Error : opening this file is not possible" << filename << std::endl;
+        continue;
+      }
+
+      
+      if (recv.tellp() == 0) {
+        recv << "indexTimeSample,xn,yn,zn,varnp1\n";
+      }
+
+      for (int i = 0; i < num_sample_; ++i) {
+        recv << i << ","
+             << xn << ","
+             << yn << ","
+             << zn << ","
+             << pnAtReceiver(m, i) << "\n";
+      }
+
+    }
     totalOutputTime += system_clock::now() - startOutputTime;
   }
-
   auto totalEnd = system_clock::now();
   double totalRun_us =
       duration_cast<microseconds>(totalEnd - totalStart).count();
