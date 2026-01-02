@@ -98,6 +98,7 @@ class SEMproxy
   // slices
   bool slices;
   bool quantification;
+  int nBit;
   bool RLE;
   // physics
   bool isElastic_;

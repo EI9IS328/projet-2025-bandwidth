@@ -26,6 +26,7 @@ class SemProxyOptions
   bool slices = false;
   bool quantification = false;
   bool RLE = false;
+  int nBit = 32;
 
   // sponge boundaries parameters
   float boundaries_size = 0;
@@ -73,7 +74,9 @@ static void bind_cli(cxxopts::Options& opts, SemProxyOptions& o)
     // 🔹 New option here:
     ("snap", "Size of the step for the snapshot",
      cxxopts::value<int>(o.snapshot))
-	 ("recv_file", "Size of the step for the snapshot",
+     ("nBit", "Bits number for quantification",
+     cxxopts::value<int>(o.nBit))
+	 ("recv_file", "file name for receivers",
      cxxopts::value<std::string>(o.recv_file))
     ("sismo", " sismogrammes  mode",
      cxxopts::value<bool>(o.recv_on))

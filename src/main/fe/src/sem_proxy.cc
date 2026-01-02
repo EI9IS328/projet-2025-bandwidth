@@ -25,10 +25,9 @@
 #include <vector>
 using namespace SourceAndReceiverUtils;
 
-struct RLEPair
-{
-  uint16_t value;
-  uint32_t count;
+struct RLEPair {
+    uint32_t value; 
+    uint32_t count;
 };
 struct QuantizationMeta
 {
@@ -38,37 +37,49 @@ struct QuantizationMeta
 };
 
 // Fonction de compression RLE
-std::vector<RLEPair> RLE_compress(const std::vector<uint16_t>& data)
+std::vector<RLEPair> RLE_compress(const std::vector<uint8_t>& data, size_t elementSize)
 {
-  std::vector<RLEPair> compressed;
-  if (data.empty()) return compressed;
+    std::vector<RLEPair> compressed;
+    if (data.empty() || elementSize == 0) return compressed;
 
-  uint16_t current = data[0];
-  uint32_t count = 1;
+    size_t nbElements = data.size() / elementSize;
 
-  for (size_t i = 1; i < data.size(); ++i)
-  {
-    if (data[i] == current)
+
+    auto getValue = [&](size_t index) -> uint32_t {
+        uint32_t val = 0;
+        std::memcpy(&val, &data[index * elementSize], elementSize);
+        return val;
+    };
+
+    uint32_t current = getValue(0);
+    uint32_t count = 1;
+
+    for (size_t i = 1; i < nbElements; ++i)
     {
-      ++count;
+        uint32_t val = getValue(i);
+        if (val == current)
+        {
+            ++count;
+        }
+        else
+        {
+            compressed.push_back({current, count});
+            current = val;
+            count = 1;
+        }
     }
-    else
-    {
-      compressed.push_back({current, count});
-      current = data[i];
-      count = 1;
-    }
-  }
-  compressed.push_back({current, count});
-  return compressed;
+    compressed.push_back({current, count});
+
+    return compressed;
 }
+
 
 // Écriture binaire compressée
 void writeRLE(const std::string& filename,
               const std::vector<RLEPair>& compressed,
               const QuantizationMeta& qmeta)
 {
-  std::ofstream out(filename, std::ios::binary);
+  std::ofstream out(filename, std::ios::binary | std::ios::app);
   out.write(reinterpret_cast<const char*>(&qmeta), sizeof(qmeta));
   out.write(reinterpret_cast<const char*>(compressed.data()),
             compressed.size() * sizeof(RLEPair));
@@ -76,15 +87,34 @@ void writeRLE(const std::string& filename,
 
 inline uint32_t quantize(float value, const QuantizationMeta& meta)
 {
+  
   float clamped = std::min(std::max(value, meta.minVal), meta.maxVal);
   float normalized = (clamped - meta.minVal) / (meta.maxVal - meta.minVal);
-  uint32_t maxInt = (1u << meta.nBits) - 1;
+
+  uint32_t maxInt;
+  if (meta.nBits == 32)
+  {
+      maxInt = std::numeric_limits<uint32_t>::max();
+  }
+  else
+  {
+      maxInt = (1u << meta.nBits) - 1u;
+  }
+
   return static_cast<uint32_t>(std::round(normalized * maxInt));
 }
 
 inline float dequantize(uint32_t qValue, const QuantizationMeta& meta)
 {
-  uint32_t maxInt = (1u << meta.nBits) - 1;
+  uint32_t maxInt;
+  if (meta.nBits == 32)
+  {
+      maxInt = std::numeric_limits<uint32_t>::max();
+  }
+  else
+  {
+      maxInt = (1u << meta.nBits) - 1u;
+  }
   float normalized = static_cast<float>(qValue) / static_cast<float>(maxInt);
   return meta.minVal + normalized * (meta.maxVal - meta.minVal);
 }
@@ -133,6 +163,14 @@ void saveSlicePPM(const std::string& filename,
   ppm.close();
 }
 
+void removeFileIfExists(const std::string& filename)
+{
+    if (std::filesystem::exists(filename))
+    {
+        std::filesystem::remove(filename);
+    }
+}
+
 SEMproxy::SEMproxy(const SemProxyOptions& opt)
 {
   const int order = opt.order;
@@ -148,6 +186,7 @@ SEMproxy::SEMproxy(const SemProxyOptions& opt)
   ad_hoc = opt.ad_hoc;
   slices = opt.slices;
   RLE = opt.RLE;
+  nBit=opt.nBit;
   quantification = opt.quantification;
   const float spongex = opt.boundaries_size;
   const float spongey = opt.boundaries_size;
@@ -262,6 +301,12 @@ SEMproxy::SEMproxy(const SemProxyOptions& opt)
 void SEMproxy::run()
 {
   // In-situ statistics variables
+  removeFileIfExists("snapshot_quant.bin");
+  removeFileIfExists("snapshot_quant_rle.bin");
+  for(int m=0;m<num_receivers;m++){
+    removeFileIfExists("sismo_quant_" + std::to_string(m) + ".bin");
+    removeFileIfExists("sismo_quant_rle_" + std::to_string(m) + ".bin");
+  }
   float minVal = std::numeric_limits<float>::max();
   float maxVal = std::numeric_limits<float>::lowest();
   float minPreRecv[num_receivers];
@@ -273,7 +318,9 @@ void SEMproxy::run()
     maxPreRecv[m] = std::numeric_limits<float>::lowest();
     meanRecv[m] = 0.0f;
   }
-
+  //Pour calculer le taux de compression
+  size_t originalSize = 0;
+  size_t compressedSize = 0;
   using std::chrono::duration_cast;
   using std::chrono::microseconds;
   using std::chrono::system_clock;
@@ -487,71 +534,88 @@ void SEMproxy::run()
           duration_cast<microseconds>(endSnapshot - startSnapshot).count();
     }
 
-    // =======================
-    //  SNAPSHOT QUANTIZATION (ADD-ON)
-    // =======================
+    // =================================
+    //  SNAPSHOT QUANTIZATION (ADD-ON) 
+    // ===============================
     if (snapshot > 0 && indexTimeSample != 0 &&
-        indexTimeSample % snapshot == 0 && !ad_hoc && quantification)
-    {
-      int nbNodes = m_mesh->getNumberOfNodes();
-
-      QuantizationMeta qmeta;
-      qmeta.minVal = minVal;
-      qmeta.maxVal = maxVal;
-      qmeta.nBits = 16;
-
-      std::vector<float> original(nbNodes);
-      for (int n = 0; n < nbNodes; ++n)
+    indexTimeSample % snapshot == 0 && !ad_hoc && quantification)
       {
-        original[n] = pnGlobal(n, i1);
-      }
-      // quantification
-      std::vector<uint16_t> quantizedValues(nbNodes);
-      for (int n = 0; n < nbNodes; ++n)
-      {
-        float value = pnGlobal(n, i1);
-        quantizedValues[n] = quantize(value, qmeta);
-      }
-      // Reconstruction
-      std::vector<float> reconstructed(nbNodes);
-      for (int n = 0; n < nbNodes; ++n)
-      {
-        reconstructed[n] = dequantize(quantizedValues[n], qmeta);
-      }
-      // Calcul de la RMSE
-      float rmse = computeRMSE(original, reconstructed);
-      std::cout << "RMSE after quantization: " << rmse << std::endl;
+          int nbNodes = m_mesh->getNumberOfNodes();
+      
+          QuantizationMeta qmeta;
+          qmeta.minVal = minVal;
+          qmeta.maxVal = maxVal;
+          qmeta.nBits = nBit;
+          
+          
+          std::vector<float> original(nbNodes);
+          for (int n = 0; n < nbNodes; ++n)
+              original[n] = pnGlobal(n, i1);
+      
+          // Quantification
+          size_t elemSize = (nBit + 7)/8;   
+          std::vector<uint8_t> buffer(nbNodes * elemSize);
+      
+          for (int n = 0; n < nbNodes; ++n)
+          {
+              float value = pnGlobal(n, i1);
+              uint32_t q = quantize(value, qmeta);
+              //if(value >= 0.05)
+              //std::cout << q  << " "<< value << std::endl;
+              std::memcpy(&buffer[n * elemSize], &q, elemSize);
+          }
+        
+          // Reconstruction pour RMSE
+          std::vector<float> reconstructed(nbNodes);
+          for (int n = 0; n < nbNodes; ++n)
+          {
+              uint32_t q = 0;
+              std::memcpy(&q, &buffer[n * elemSize], elemSize);
+              reconstructed[n] = dequantize(q, qmeta);
+              //std::cout << reconstructed[n] << std::endl;
+          }
+        
+          // Calcul de la RMSE
+          float rmse = computeRMSE(original, reconstructed);
+          std::cout << "RMSE after quantization: " << rmse << std::endl;
+        
+          // Écrire dans le fichier binaire
+          std::ofstream outQuant("snapshot_quant.bin", std::ios::binary | std::ios::app);
+          outQuant.write(reinterpret_cast<char*>(&qmeta), sizeof(qmeta));
+          outQuant.write(reinterpret_cast<char*>(buffer.data()), buffer.size());
+          originalSize += nbNodes * sizeof(float);
+          compressedSize += buffer.size() * sizeof(uint8_t) + sizeof(qmeta);
 
-      // Écrire dans le fichier binaire
-      std::ofstream outQuant("snapshot_quant.bin", std::ios::binary);
-      outQuant.write(reinterpret_cast<char*>(&qmeta), sizeof(qmeta));
-      outQuant.write(reinterpret_cast<char*>(quantizedValues.data()),
-                     quantizedValues.size() * sizeof(uint16_t));
-    }
+      }
 
-    // =======================
-    //  Run-Length Encoding (RLE)
-    // =======================
+
+    // ==========================================
+    //  Run-Length Encoding (RLE) for snapshots
+    // ==========================================
     if (snapshot > 0 && indexTimeSample != 0 &&
         indexTimeSample % snapshot == 0 && !ad_hoc && RLE)
     {
       int nbNodes = m_mesh->getNumberOfNodes();
-      QuantizationMeta qmeta{minVal, maxVal, 16};
+      QuantizationMeta qmeta{minVal, maxVal, nBit};
 
-      std::vector<uint16_t> quantizedValues(nbNodes);
+      //std::vector<uint16_t> quantizedValues(nbNodes);
+      size_t elemSize = (nBit + 7)/8;   
+      std::vector<uint8_t> buffer(nbNodes * elemSize);
       for (int n = 0; n < nbNodes; ++n)
-        quantizedValues[n] = quantize(pnGlobal(n, i1), qmeta);
+      {
+        float value = pnGlobal(n, i1);
+        uint32_t q = quantize(value, qmeta);
+        std::memcpy(&buffer[n * elemSize], &q, elemSize);
+      }
 
       // Quantification déjà faite : quantizedValues
-      auto rleData = RLE_compress(quantizedValues);
+      auto rleData = RLE_compress(buffer,elemSize);
       writeRLE("snapshot_quant_rle.bin", rleData, qmeta);
 
       // --- Mesure du taux de compression ---
-      size_t originalSize = quantizedValues.size() * sizeof(uint16_t);
-      size_t compressedSize = rleData.size() * sizeof(RLEPair);
-      double compressionRatio =
-          static_cast<double>(originalSize) / compressedSize;
-      std::cout << "Compression ratio: " << compressionRatio << "\n";
+      originalSize += nbNodes * sizeof(float);
+      compressedSize += rleData.size() * sizeof(RLEPair) + sizeof(qmeta);
+      
     }
 
     // =======================
@@ -602,38 +666,94 @@ void SEMproxy::run()
   // ============================
   // 4) Writting sismo in files
   // ============================
-  if (ad_hoc) {
+  if (recv_on) {
+
     startOutputTime = system_clock::now();
-    for (int m = 0; m < num_receivers; ++m) {
 
-      const float xn = m_mesh->nodeCoord(rhsElementRcv[m], 0);
-      const float yn = m_mesh->nodeCoord(rhsElementRcv[m], 1);
-      const float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
+    if(ad_hoc){ //ad_hoc
       
-      const std::string filename = "recev_results_" + std::to_string(m) + ".csv";
-      std::ofstream recv(filename, std::ios::app);
+      for (int m = 0; m < num_receivers; ++m) {
 
-      if (!recv.is_open()) {
-        std::cerr << "Error : opening this file is not possible" << filename << std::endl;
-        continue;
+        const float xn = m_mesh->nodeCoord(rhsElementRcv[m], 0);
+        const float yn = m_mesh->nodeCoord(rhsElementRcv[m], 1);
+        const float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
+
+        const std::string filename = "recev_results_" + std::to_string(m) + ".csv";
+        std::ofstream recv(filename, std::ios::app);
+
+        if (!recv.is_open()) {
+          std::cerr << "Error : opening this file is not possible" << filename << std::endl;
+          continue;
+        }
+
+
+        if (recv.tellp() == 0) {
+          recv << "indexTimeSample,xn,yn,zn,varnp1\n";
+        }
+
+        for (int i = 0; i < num_sample_; ++i) {
+          recv << i << ","
+               << xn << ","
+               << yn << ","
+               << zn << ","
+               << pnAtReceiver(m, i) << "\n";
+        }
+
       }
+    }
 
+    if(RLE || quantification){
       
-      if (recv.tellp() == 0) {
-        recv << "indexTimeSample,xn,yn,zn,varnp1\n";
-      }
 
-      for (int i = 0; i < num_sample_; ++i) {
-        recv << i << ","
-             << xn << ","
-             << yn << ","
-             << zn << ","
-             << pnAtReceiver(m, i) << "\n";
+      size_t elemSize = (nBit + 7)/8;   
+      
+      for (int m = 0; m < num_receivers; ++m) {
+        QuantizationMeta qmeta;
+        qmeta.minVal = minPreRecv[m];
+        qmeta.maxVal = maxPreRecv[m];
+        qmeta.nBits = nBit;
+        std::vector<uint8_t> buffer(num_sample_ * elemSize);
+        std::vector<float> original(num_sample_);
+        for (int i = 0; i < num_sample_; ++i) {
+          float value = pnAtReceiver(m, i);
+          uint32_t q = quantize(value, qmeta);
+          std::memcpy(&buffer[i * elemSize], &q, elemSize);  
+          original[i] = value;     
+        }
+        if(quantification){// quantification
+          
+               // Reconstruction pour RMSE
+          std::vector<float> reconstructed(num_sample_);
+          for (int n = 0; n < num_sample_; ++n)
+          {
+              uint32_t q = 0;
+              std::memcpy(&q, &buffer[n * elemSize], elemSize);
+              reconstructed[n] = dequantize(q, qmeta);
+              //std::cout << reconstructed[n] << std::endl;
+          }
+        
+          // Calcul de la RMSE
+          float rmse = computeRMSE(original, reconstructed);
+          std::cout << "RMSE after quantization: " << rmse << std::endl;
+        
+        // Écrire dans le fichier binaire
+          std::ofstream outQuant("sismo_quant_" + std::to_string(m) + ".bin", std::ios::binary | std::ios::app);
+          outQuant.write(reinterpret_cast<char*>(&qmeta), sizeof(qmeta));
+          outQuant.write(reinterpret_cast<char*>(buffer.data()), buffer.size());
+          originalSize += num_sample_ * sizeof(float);
+          compressedSize += buffer.size() * sizeof(uint8_t) + sizeof(qmeta);
+        }
+        if(RLE){
+          
+          auto rleData = RLE_compress(buffer,elemSize);
+          writeRLE("sismo_quant_rle_"+ std::to_string(m) + ".bin", rleData, qmeta);
+          originalSize += num_sample_ * sizeof(float);
+          compressedSize += rleData.size() * sizeof(RLEPair) + sizeof(qmeta);
+        }
       }
-
     }
     totalOutputTime += system_clock::now() - startOutputTime;
-  }
+  } 
   auto totalEnd = system_clock::now();
   double totalRun_us =
       duration_cast<microseconds>(totalEnd - totalStart).count();
@@ -654,20 +774,27 @@ void SEMproxy::run()
   std::cout << "---- Elapsed Output Time   : " << output_s << " s\n";
   std::cout << "----   - Snapshot Time     : " << snapshot_s << " s\n";
   if(!ad_hoc){
-    std::cout << "----   - Min by in-situ     : " << minVal << " s\n";
-    std::cout << "----   - Max by in-situ        : " << maxVal << " s\n";
-    std::cout << "------------------------------------------------ \n";
-
+    if(snapshot){
+      std::cout << "----   - Min by in-situ     : " << minVal << " s\n";
+      std::cout << "----   - Max by in-situ        : " << maxVal << " s\n";
+      std::cout << "------------------------------------------------ \n";
+    }
+    if(RLE){
+      double compressionRatio = static_cast<double>(originalSize) / compressedSize;
+      std::cout << "---- Compression ratio: " << compressionRatio << "\n";
+    }
+    if(recv_on){
     for (int i = 0; i < num_receivers; i++)
-    {
-      std::cout << "------------------------------------------------ \n";
-      std::cout << "----   - Min pressure of receiver " << i
-                << " by in-situ     : " << minPreRecv[i] << " s\n";
-      std::cout << "----   - Max pressure of receiver " << i
-                << " by in-situ     : " << maxPreRecv[i] << " s\n";
-      std::cout << "----   - Mean pressure of receiver " << i
-                << " by in-situ     : " << meanRecv[i] << " s\n";
-      std::cout << "------------------------------------------------ \n";
+      {
+        std::cout << "------------------------------------------------ \n";
+        std::cout << "----   - Min pressure of receiver " << i
+                  << " by in-situ     : " << minPreRecv[i] << " s\n";
+        std::cout << "----   - Max pressure of receiver " << i
+                  << " by in-situ     : " << maxPreRecv[i] << " s\n";
+        std::cout << "----   - Mean pressure of receiver " << i
+                  << " by in-situ     : " << meanRecv[i] << " s\n";
+        std::cout << "------------------------------------------------ \n";
+      }
     }
   }
   std::cout << "----   - Sismo Time        : " << sismo_s << " s\n";
