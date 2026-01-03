@@ -99,7 +99,7 @@ static void bind_cli(cxxopts::Options& opts, SemProxyOptions& o)
      cxxopts::value<bool>(o.isElastic))
      ("quantification", " Compression with loss",
      cxxopts::value<bool>(o.quantification))
-     ("RLE", " Run-Length Encoding (without loss)",
+     ("RLE", " Run-Length Encoding + quantification",
      cxxopts::value<bool>(o.RLE));
      ;
 }

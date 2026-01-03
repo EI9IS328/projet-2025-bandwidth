@@ -85,37 +85,29 @@ void writeRLE(const std::string& filename,
             compressed.size() * sizeof(RLEPair));
 }
 
-inline uint32_t quantize(float value, const QuantizationMeta& meta)
+uint32_t quantize(float value, const QuantizationMeta& meta)
 {
-  
-  float clamped = std::min(std::max(value, meta.minVal), meta.maxVal);
-  float normalized = (clamped - meta.minVal) / (meta.maxVal - meta.minVal);
+    float clamped = std::min(std::max(value, meta.minVal), meta.maxVal);
+    float normalized = (clamped - meta.minVal) / (meta.maxVal - meta.minVal);
 
-  uint32_t maxInt;
-  if (meta.nBits == 32)
-  {
-      maxInt = std::numeric_limits<uint32_t>::max();
-  }
-  else
-  {
-      maxInt = (1u << meta.nBits) - 1u;
-  }
+    uint64_t maxInt64;
+    if (meta.nBits == 32)
+        maxInt64 = uint64_t(std::numeric_limits<uint32_t>::max());
+    else
+        maxInt64 = (1ull << meta.nBits) - 1;
 
-  return static_cast<uint32_t>(std::round(normalized * maxInt));
+    return static_cast<uint32_t>(std::round(static_cast<double>(normalized) * maxInt64));
 }
+
 
 inline float dequantize(uint32_t qValue, const QuantizationMeta& meta)
 {
-  uint32_t maxInt;
-  if (meta.nBits == 32)
-  {
-      maxInt = std::numeric_limits<uint32_t>::max();
-  }
-  else
-  {
-      maxInt = (1u << meta.nBits) - 1u;
-  }
-  float normalized = static_cast<float>(qValue) / static_cast<float>(maxInt);
+  uint64_t maxInt64;
+    if (meta.nBits == 32)
+        maxInt64 = uint64_t(std::numeric_limits<uint32_t>::max());
+    else
+        maxInt64 = (1ull << meta.nBits) - 1;
+  double normalized = static_cast<double>(qValue) / static_cast<double>(maxInt64);
   return meta.minVal + normalized * (meta.maxVal - meta.minVal);
 }
 
@@ -303,9 +295,11 @@ void SEMproxy::run()
   // In-situ statistics variables
   removeFileIfExists("snapshot_quant.bin");
   removeFileIfExists("snapshot_quant_rle.bin");
+  removeFileIfExists("results.csv");
   for(int m=0;m<num_receivers;m++){
     removeFileIfExists("sismo_quant_" + std::to_string(m) + ".bin");
     removeFileIfExists("sismo_quant_rle_" + std::to_string(m) + ".bin");
+    removeFileIfExists("recev_results_"+ std::to_string(m) +".csv");
   }
   float minVal = std::numeric_limits<float>::max();
   float maxVal = std::numeric_limits<float>::lowest();
@@ -386,7 +380,7 @@ void SEMproxy::run()
       std::vector<float> sliceValues(nx * ny, 0.0f);
 
       std::ofstream sliceFile;
-
+      startOutputTime = system_clock::now();
       if (indexTimeSample == slice_every)
       {
         sliceFile.open("slice_xy.csv");
@@ -396,7 +390,7 @@ void SEMproxy::run()
       {
         sliceFile.open("slice_xy.csv", std::ios::app);
       }
-
+      totalOutputTime += system_clock::now() - startOutputTime;
       float tol = 0.5f * m_mesh->getMinSpacing();
 
       int idx = 0;
@@ -438,8 +432,10 @@ void SEMproxy::run()
           // Écriture CSV
           float x = m_mesh->nodeCoord(bestNode, 0);
           float y = m_mesh->nodeCoord(bestNode, 1);
+          startOutputTime = system_clock::now();
           sliceFile << indexTimeSample << "," << x << "," << y << "," << value
                     << "\n";
+          totalOutputTime += system_clock::now() - startOutputTime;
         }
       }
 
@@ -449,9 +445,10 @@ void SEMproxy::run()
           *std::min_element(sliceValues.begin(), sliceValues.end());
       float sliceMax =
           *std::max_element(sliceValues.begin(), sliceValues.end());
-
+      startOutputTime = system_clock::now();
       saveSlicePPM("slice_xy_" + std::to_string(indexTimeSample) + ".ppm",
                    sliceValues, nx, ny, sliceMin, sliceMax);
+      totalOutputTime += system_clock::now() - startOutputTime;
     }
     //=======================
     // 1) Kernel / compute
@@ -580,9 +577,13 @@ void SEMproxy::run()
           std::cout << "RMSE after quantization: " << rmse << std::endl;
         
           // Écrire dans le fichier binaire
+          startComputeTime = system_clock::now();
           std::ofstream outQuant("snapshot_quant.bin", std::ios::binary | std::ios::app);
           outQuant.write(reinterpret_cast<char*>(&qmeta), sizeof(qmeta));
           outQuant.write(reinterpret_cast<char*>(buffer.data()), buffer.size());
+          //std::cout << buffer.size() << std::endl;
+          totalOutputTime += system_clock::now() - startOutputTime;
+
           originalSize += nbNodes * sizeof(float);
           compressedSize += buffer.size() * sizeof(uint8_t) + sizeof(qmeta);
 
@@ -610,7 +611,10 @@ void SEMproxy::run()
 
       // Quantification déjà faite : quantizedValues
       auto rleData = RLE_compress(buffer,elemSize);
+      startComputeTime = system_clock::now();
       writeRLE("snapshot_quant_rle.bin", rleData, qmeta);
+      totalOutputTime += system_clock::now() - startOutputTime;
+
 
       // --- Mesure du taux de compression ---
       originalSize += nbNodes * sizeof(float);
@@ -626,6 +630,7 @@ void SEMproxy::run()
       auto startSismo = system_clock::now();
 
       float varnp1 = 0.0f;
+
 
       for (int m = 0; m < num_receivers; m++)
       {
@@ -668,7 +673,6 @@ void SEMproxy::run()
   // ============================
   if (recv_on) {
 
-    startOutputTime = system_clock::now();
 
     if(ad_hoc){ //ad_hoc
       
@@ -679,6 +683,7 @@ void SEMproxy::run()
         const float zn = m_mesh->nodeCoord(rhsElementRcv[m], 2);
 
         const std::string filename = "recev_results_" + std::to_string(m) + ".csv";
+        startComputeTime = system_clock::now();
         std::ofstream recv(filename, std::ios::app);
 
         if (!recv.is_open()) {
@@ -686,11 +691,11 @@ void SEMproxy::run()
           continue;
         }
 
-
+        
         if (recv.tellp() == 0) {
           recv << "indexTimeSample,xn,yn,zn,varnp1\n";
         }
-
+        
         for (int i = 0; i < num_sample_; ++i) {
           recv << i << ","
                << xn << ","
@@ -698,6 +703,7 @@ void SEMproxy::run()
                << zn << ","
                << pnAtReceiver(m, i) << "\n";
         }
+        totalOutputTime += system_clock::now() - startOutputTime;
 
       }
     }
@@ -734,25 +740,28 @@ void SEMproxy::run()
         
           // Calcul de la RMSE
           float rmse = computeRMSE(original, reconstructed);
+          startComputeTime = system_clock::now();
           std::cout << "RMSE after quantization: " << rmse << std::endl;
         
         // Écrire dans le fichier binaire
           std::ofstream outQuant("sismo_quant_" + std::to_string(m) + ".bin", std::ios::binary | std::ios::app);
           outQuant.write(reinterpret_cast<char*>(&qmeta), sizeof(qmeta));
           outQuant.write(reinterpret_cast<char*>(buffer.data()), buffer.size());
+          totalOutputTime += system_clock::now() - startOutputTime;
           originalSize += num_sample_ * sizeof(float);
           compressedSize += buffer.size() * sizeof(uint8_t) + sizeof(qmeta);
         }
         if(RLE){
-          
+          startComputeTime = system_clock::now();
           auto rleData = RLE_compress(buffer,elemSize);
           writeRLE("sismo_quant_rle_"+ std::to_string(m) + ".bin", rleData, qmeta);
+          totalOutputTime += system_clock::now() - startOutputTime;
           originalSize += num_sample_ * sizeof(float);
           compressedSize += rleData.size() * sizeof(RLEPair) + sizeof(qmeta);
         }
       }
     }
-    totalOutputTime += system_clock::now() - startOutputTime;
+    
   } 
   auto totalEnd = system_clock::now();
   double totalRun_us =
@@ -775,11 +784,11 @@ void SEMproxy::run()
   std::cout << "----   - Snapshot Time     : " << snapshot_s << " s\n";
   if(!ad_hoc){
     if(snapshot){
-      std::cout << "----   - Min by in-situ     : " << minVal << " s\n";
+      std::cout << "----   - Min by in-situ     : " << minVal << " " << sizeof(float) << " s\n";
       std::cout << "----   - Max by in-situ        : " << maxVal << " s\n";
       std::cout << "------------------------------------------------ \n";
     }
-    if(RLE){
+    if(RLE || quantification){
       double compressionRatio = static_cast<double>(originalSize) / compressedSize;
       std::cout << "---- Compression ratio: " << compressionRatio << "\n";
     }
